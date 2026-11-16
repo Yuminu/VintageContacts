@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f2eee5">
+  <meta name="description" content="把想念写在纸上。复古转盘电话与一本会记得你的通讯录，支持收藏、多种联系方式与 Excel 导入导出。">
+  <title>通讯录 · 纸间来电</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23ae3d32'/%3E%3Ctext x='7' y='29' font-size='27' fill='%23fff'%3E☎%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/xlsx.full.min.js" defer></script><script src="app.js" type="module"></script>
+</head>
+<body>
+<svg class="svg-defs" aria-hidden="true"><defs>
+  <filter id="paperNoise"><feTurbulence type="fractalNoise" baseFrequency=".68" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".16"/></feComponentTransfer><feBlend in="SourceGraphic" mode="multiply"/></filter>
+  <linearGradient id="phoneRed" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ca5548"/><stop offset=".5" stop-color="#b13a30"/><stop offset="1" stop-color="#8d2c27"/></linearGradient>
+  <linearGradient id="blackMetal" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#353934"/><stop offset="1" stop-color="#1c211e"/></linearGradient>
+  <radialGradient id="dialCenter"><stop stop-color="#dfd8c7"/><stop offset=".88" stop-color="#ccc1ad"/><stop offset="1" stop-color="#9e927d"/></radialGradient>
+</defs></svg>
+<div class="paper-grain" aria-hidden="true"></div>
+<header class="topbar">
+  <a href="#" class="brand" id="homeLink"><span class="brand-icon">☎</span><span>纸间来电<small>PAPER & RING</small></span></a>
+  <nav aria-label="主导航"><button id="openBookTop">翻开通讯录 <span>↗</span></button><button id="helpButton" class="round-button" aria-label="使用说明">?</button><button id="soundButton" class="round-button" aria-label="开启音效" title="开启音效">♫<span class="sound-dot"></span></button></nav>
+</header>
+<main class="scene" id="scene">
+  <section class="intro"><div class="eyebrow"><span></span> A LITTLE CLOSER, EVERY DAY</div><h1>通讯录<span class="title-dot">。</span></h1><p>有些联系，值得慢慢拨。</p><span class="intro-note">一本记事簿，一通熟悉的来电。</span></section>
+  <div class="desk" aria-hidden="true"><span></span></div>
+  <button class="mini-book" id="openBook" aria-label="翻开通讯录记事簿">
+    <span class="mini-cover"></span><span class="mini-page mini-left"><span class="mini-date">一些值得记住的人</span><span class="mini-line">特别关心 <i>☆</i></span><span class="mini-scribble">把想念，写下来。</span><span class="mini-lines"></span></span><span class="mini-page mini-right"><span class="mini-title">通讯录</span><span id="miniNames"></span><span class="mini-page-number">01</span></span><span class="mini-ribbon"></span><span class="book-open-hint">轻点，翻开记事簿 ↗</span>
+  </button>
+  <div class="phone-area" id="phoneArea">
+    <div class="number-bubble" id="numberBubble" hidden><span class="bubble-label">写下号码，或慢慢拨</span><div class="number-row"><input id="phoneInput" type="tel" inputmode="numeric" maxlength="11" placeholder="输入 11 位号码" aria-label="电话号码"><button id="backspace" aria-label="删除末位数字">⌫</button></div><div class="bubble-bottom"><span id="numberHint">也可以直接在这里输入</span><button id="clearNumber">清空</button></div></div>
+    <div class="ring-marks" id="ringMarks" aria-hidden="true"><span>♪</span><span>♬</span><span>♫</span></div>
+    <svg class="phone-illustration" viewBox="0 0 760 660" role="img" aria-label="一部红色的老式转盘电话">
+      <ellipse cx="407" cy="594" rx="282" ry="30" fill="#59483a" opacity=".13"/>
+      <path d="M180 220 C75 218 152 331 89 349 C48 363 116 390 85 407 C44 430 115 445 83 464 C46 487 123 501 93 520 C60 543 122 556 136 553" fill="none" stroke="#323831" stroke-width="14" stroke-linecap="round"/>
+      <path d="M665 420 C745 411 705 547 755 550" fill="none" stroke="#393c32" stroke-width="9"/>
+      <path d="M181 229 Q184 203 217 203 L582 203 Q613 203 618 233 L672 546 Q678 583 637 586 L157 586 Q116 583 123 549Z" fill="#792b26"/>
+      <path d="M179 218 Q183 192 216 192 L580 192 Q608 192 613 222 L664 529 Q671 565 632 568 L161 568 Q125 568 131 532Z" fill="url(#phoneRed)"/>
+      <path d="M190 217 Q198 205 220 205 L576 205" fill="none" stroke="#ec9780" stroke-width="3" opacity=".5"/>
+      <path d="M210 203 L224 174 L281 174 L292 203 M505 203 L515 174 L570 174 L580 203" fill="#732b27" stroke="#5e2824" stroke-width="4"/>
+      <rect x="204" y="183" width="91" height="30" rx="10" fill="#7b2924"/><rect x="500" y="183" width="85" height="30" rx="10" fill="#7b2924"/>
+      <g id="handset" class="handset"><path d="M157 173 Q141 169 146 150 L157 107 Q163 91 190 90 L608 90 Q634 90 641 108 L652 151 Q657 169 640 173 L560 185 Q546 187 539 172 L519 141 L277 141 L257 172 Q250 188 234 185Z" fill="#8b3029"/><path d="M150 160 Q137 156 142 139 L154 96 Q160 80 186 80 L603 80 Q630 80 637 98 L649 139 Q655 156 638 160 L557 173 Q545 175 536 160 L517 129 L275 129 L255 160 Q248 175 232 172Z" fill="url(#blackMetal)"/><path d="M173 94 L601 94" stroke="#6d7065" stroke-width="2" opacity=".55"/><path d="M153 146 L235 159 M557 160 L638 147" stroke="#0b100c" stroke-width="3"/></g>
+      <circle cx="397" cy="369" r="143" fill="#7b2b25"/><circle cx="397" cy="363" r="139" fill="#262e27"/><circle cx="397" cy="363" r="132" fill="none" stroke="#4f5447" stroke-width="2"/>
+      <text x="399" y="528" text-anchor="middle" fill="#eac4ac" font-size="13" letter-spacing="6" font-family="Georgia">PAPER & RING</text>
+    </svg>
+    <div class="rotary" id="rotary" role="group" aria-label="电话转盘，拖动旋转或点击数字"><div class="dial-digits" id="dialDigits"></div><div class="dial-center"><span>PAPER & RING</span><strong id="dialPreview">拨</strong><small id="dialCaption">转动 · 停留 · 记下</small></div><span class="dial-pointer" aria-hidden="true"></span></div>
+    <button id="liftHandset" class="lift-hit" aria-label="拿起听筒，输入号码"></button>
+  </div>
+  <div class="phone-instruction"><span class="curved-arrow">↶</span><div>转一转，找个想念的人<small>拖动转盘 · 数字停留 1 秒即输入</small></div></div>
+  <span class="desk-caption">GOOD CONNECTIONS NEVER GET OLD.</span>
+</main>
+<footer class="footer"><span><i></i> <span id="contactCount">0 位联系人</span>，好好记着。</span><span>写在纸上，也放在心上 <span class="footer-star">✳</span></span></footer>
+
+<div class="book-overlay" id="bookOverlay" hidden>
+  <div class="book-shell" role="dialog" aria-modal="true" aria-labelledby="bookTitle">
+    <div class="book-top"><span id="bookBreadcrumb">通讯录 / 扉页</span><span id="saveStatus" role="status">每一次修改，都会好好记下</span><button id="closeBook" aria-label="收起记事簿">收起记事簿 ×</button></div>
+    <div class="large-book"><div class="binding"></div><section class="book-page left-page" id="leftPage"></section><section class="book-page right-page" id="rightPage"></section><div class="book-bottom-shadow"></div></div>
+    <div class="book-tools"><button id="pencilButton" class="pencil-button" aria-label="Excel 导入与导出"><span class="pencil-shape"></span><span>Excel 导入 / 导出</span></button></div>
+  </div>
+</div>
+<dialog id="utilityDialog" aria-labelledby="dialogTitle"><div id="dialogContent"></div></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+<input type="file" id="excelFile" accept=".xlsx,.xls" hidden>
+</body></html>

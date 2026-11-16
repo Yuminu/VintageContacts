@@ -1,0 +1,11 @@
+{
+  "name": "vintagecontacts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "复古转盘电话与纸质记事簿通讯录",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/data.test.mjs"
+  }
+}
