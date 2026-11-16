@@ -12,6 +12,12 @@ test('多种联系方式校验、格式归一化与跨联系人号码冲突',()=
   assert.match(validateContact({...a,phones:['138 0000 0002']},[a,b]).phones,/另一位/);
   assert.match(validateContact({...a,emails:['wrong@']},[a,b]).emails,/邮箱/);
 });
+test('邮箱跨联系人冲突会被阻止保存',()=>{
+  const a={...make('甲','13800000001'),emails:['a@example.com']};
+  const b={...make('乙','13900000001'),emails:['b@example.com']};
+  assert.match(validateContact({...a,emails:['b@example.com']},[a,b]).emails,/另一位/);
+});
+
 test('导入可合并多联系方式，不覆盖原数组、统计、备注和收藏',()=>{
   const old={...make('林知夏','13800000001'),emails:['old@example.com'],notes:'旧备注',favorite:true,dialCount:4};
   const result=planImport([{'姓名':'林知夏','电话号码':'13800000001；13900000001','电子邮箱':'new@example.com','社交媒体账号':'微信:summer；QQ:123'}],[old]);

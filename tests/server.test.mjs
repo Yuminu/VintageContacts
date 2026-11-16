@@ -25,17 +25,32 @@ function close(ctx) {
   });
 }
 
-const sample = {
-  name: '测试联系人',
-  group: '朋友',
-  speedCode: '001',
-  phones: ['13800000001', '13800000002'],
-  emails: ['one@example.com', 'two@example.com'],
-  socials: [{ platform: '微信', value: 'test-user' }],
-  address: '福州',
-  notes: '测试备注',
-  favorite: true
-};
+function make(overrides = {}) {
+  return {
+    name: '测试联系人',
+    group: '朋友',
+    speedCode: '001',
+    phones: ['13800000001'],
+    emails: ['one@example.com'],
+    socials: [{ platform: '微信', value: 'test-user' }],
+    address: '福州',
+    notes: '测试备注',
+    favorite: true,
+    ...overrides
+  };
+}
+
+async function getList(ctx) {
+  return (await (await fetch(`${ctx.base}/api/contacts`)).json()).data;
+}
+
+async function sendJson(ctx, method, url, body) {
+  return fetch(`${ctx.base}${url}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+}
 
 test('健康检查返回 ok', async t => {
   const ctx = await start();
@@ -51,43 +66,38 @@ test('创建、读取、更新、收藏、删除联系人', async t => {
   const ctx = await start();
   t.after(() => close(ctx));
 
-  const createdResponse = await fetch(`${ctx.base}/api/contacts`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(sample)
-  });
+  const createdResponse = await sendJson(ctx, 'POST', '/api/contacts', make());
   assert.equal(createdResponse.status, 201);
-  const created = (await createdResponse.json()).data;
+  const createdBody = await createdResponse.json();
+  const created = createdBody.data;
   assert.ok(created.id);
-  assert.equal(created.name, sample.name);
-  assert.deepEqual(created.phones, sample.phones);
-  assert.deepEqual(created.emails, sample.emails);
-  assert.deepEqual(created.socials, sample.socials);
+  assert.ok(createdBody.version >= 2);
+  assert.equal(created.name, '测试联系人');
+  assert.deepEqual(created.phones, ['13800000001']);
+  assert.deepEqual(created.emails, ['one@example.com']);
+  assert.deepEqual(created.socials, [{ platform: '微信', value: 'test-user' }]);
   assert.equal(created.favorite, true);
 
-  const listResponse = await fetch(`${ctx.base}/api/contacts`);
-  const list = (await listResponse.json()).data;
+  const list = await getList(ctx);
   assert.equal(list.contacts.length, 1);
+  assert.ok(list.version >= 2);
   assert.ok(Array.isArray(list.groups));
 
   const detailResponse = await fetch(`${ctx.base}/api/contacts/${created.id}`);
-  assert.equal((await detailResponse.json()).data.name, sample.name);
+  assert.equal((await detailResponse.json()).data.name, '测试联系人');
 
-  const updateResponse = await fetch(`${ctx.base}/api/contacts/${created.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...sample, name: '改名后', phones: ['13900000000'] })
-  });
+  const updateResponse = await sendJson(ctx, 'PUT', `/api/contacts/${created.id}`, make({
+    name: '改名后',
+    phones: ['13900000000'],
+    speedCode: '009'
+  }));
   const updated = (await updateResponse.json()).data;
   assert.equal(updated.name, '改名后');
   assert.deepEqual(updated.phones, ['13900000000']);
+  assert.equal(updated.speedCode, '009');
   assert.equal(updated.createdAt, created.createdAt);
 
-  const favoriteResponse = await fetch(`${ctx.base}/api/contacts/${created.id}/favorite`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isFavorite: false })
-  });
+  const favoriteResponse = await sendJson(ctx, 'PATCH', `/api/contacts/${created.id}/favorite`, { isFavorite: false });
   assert.equal((await favoriteResponse.json()).data.favorite, false);
 
   const deleteResponse = await fetch(`${ctx.base}/api/contacts/${created.id}`, { method: 'DELETE' });
@@ -96,40 +106,180 @@ test('创建、读取、更新、收藏、删除联系人', async t => {
   assert.equal(afterDelete.status, 404);
 });
 
-test('批量同步联系人和分组，并可查询', async t => {
+test('批量同步联系人和分组，并递增版本号', async t => {
   const ctx = await start();
   t.after(() => close(ctx));
-  const response = await fetch(`${ctx.base}/api/contacts`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contacts: [sample, { ...sample, id: 'second', name: '第二个人', phones: ['13700000000'] }], groups: ['朋友', '同事'] })
+  const before = await getList(ctx);
+  const response = await sendJson(ctx, 'PUT', '/api/contacts', {
+    contacts: [
+      make(),
+      make({
+        id: 'second',
+        name: '第二个人',
+        phones: ['13700000000'],
+        emails: ['two@example.com'],
+        speedCode: '002'
+      })
+    ],
+    groups: ['朋友', '同事'],
+    baseVersion: before.version
   });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).data.count, 2);
-  const list = (await (await fetch(`${ctx.base}/api/contacts`)).json()).data;
+  const body = await response.json();
+  assert.equal(body.data.count, 2);
+  assert.equal(body.data.version, before.version + 1);
+  const list = await getList(ctx);
   assert.equal(list.contacts.length, 2);
   assert.deepEqual(list.groups, ['朋友', '同事']);
+  assert.equal(list.version, before.version + 1);
+});
+
+test('旧版本批量同步返回 409，不删除其他客户端的新联系人', async t => {
+  const ctx = await start();
+  t.after(() => close(ctx));
+  await sendJson(ctx, 'POST', '/api/contacts', make());
+  await sendJson(ctx, 'POST', '/api/contacts', make({
+    name: '第二个人',
+    phones: ['13700000000'],
+    emails: ['two@example.com'],
+    speedCode: '002'
+  }));
+  const list = await getList(ctx);
+  assert.equal(list.contacts.length, 2);
+  assert.equal(list.version, 3);
+
+  const stale = await sendJson(ctx, 'PUT', '/api/contacts', {
+    contacts: [make()],
+    groups: list.groups,
+    baseVersion: list.version - 1
+  });
+  assert.equal(stale.status, 409);
+  const staleBody = await stale.json();
+  assert.equal(staleBody.error.code, 'VERSION_CONFLICT');
+  assert.equal(staleBody.error.details[0].currentVersion, list.version);
+
+  const afterStale = await getList(ctx);
+  assert.equal(afterStale.contacts.length, 2);
+  assert.equal(afterStale.version, list.version);
+
+  const accepted = await sendJson(ctx, 'PUT', '/api/contacts', {
+    contacts: list.contacts,
+    groups: list.groups,
+    baseVersion: list.version
+  });
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).data.version, list.version + 1);
+});
+
+test('手机号、短码跨联系人唯一，非法格式返回 400/409', async t => {
+  const ctx = await start();
+  t.after(() => close(ctx));
+  const first = await sendJson(ctx, 'POST', '/api/contacts', make());
+  assert.equal(first.status, 201);
+
+  const samePhone = await sendJson(ctx, 'POST', '/api/contacts', make({
+    name: '号码冲突',
+    speedCode: '002',
+    emails: ['two@example.com']
+  }));
+  assert.equal(samePhone.status, 409);
+  assert.equal((await samePhone.json()).error.code, 'DUPLICATE_PHONE');
+
+  const sameCode = await sendJson(ctx, 'POST', '/api/contacts', make({
+    name: '短码冲突',
+    phones: ['13700000000'],
+    emails: ['three@example.com']
+  }));
+  assert.equal(sameCode.status, 409);
+  assert.equal((await sameCode.json()).error.code, 'DUPLICATE_SPEED_CODE');
+
+  const sameEmail = await sendJson(ctx, 'POST', '/api/contacts', make({
+    name: '邮箱冲突',
+    phones: ['13600000001'],
+    emails: ['one@example.com'],
+    speedCode: ''
+  }));
+  assert.equal(sameEmail.status, 409);
+  assert.equal((await sameEmail.json()).error.code, 'DUPLICATE_EMAIL');
+
+  const badSpeedCode = await sendJson(ctx, 'POST', '/api/contacts', make({
+    name: '短码格式错误',
+    phones: ['13600000000'],
+    emails: ['four@example.com'],
+    speedCode: '12'
+  }));
+  assert.equal(badSpeedCode.status, 400);
+  assert.equal((await badSpeedCode.json()).error.code, 'INVALID_SPEED_CODE');
+
+  const badPhone = await sendJson(ctx, 'POST', '/api/contacts', make({
+    name: '电话号码错误',
+    phones: ['abc'],
+    emails: ['five@example.com'],
+    speedCode: ''
+  }));
+  assert.equal(badPhone.status, 400);
+  assert.equal((await badPhone.json()).error.code, 'INVALID_PHONE');
+
+  const badEmail = await sendJson(ctx, 'POST', '/api/contacts', make({
+    name: '邮箱错误',
+    phones: ['13500000000'],
+    emails: ['bad@'],
+    speedCode: ''
+  }));
+  assert.equal(badEmail.status, 400);
+  assert.equal((await badEmail.json()).error.code, 'INVALID_EMAIL');
+
+  const second = await sendJson(ctx, 'POST', '/api/contacts', make({
+    name: '第二个人',
+    phones: ['13700000000'],
+    emails: ['two@example.com'],
+    speedCode: '002'
+  }));
+  assert.equal(second.status, 201);
+  const secondContact = (await second.json()).data;
+
+  const duplicateUpdate = await sendJson(ctx, 'PUT', `/api/contacts/${secondContact.id}`, make({
+    id: secondContact.id,
+    name: '第二个人',
+    phones: ['13800000001'],
+    emails: ['two@example.com'],
+    speedCode: '002'
+  }));
+  assert.equal(duplicateUpdate.status, 409);
+  assert.equal((await duplicateUpdate.json()).error.code, 'DUPLICATE_PHONE');
+
+  const list = await getList(ctx);
+  const duplicateBulk = await sendJson(ctx, 'PUT', '/api/contacts', {
+    contacts: [
+      make(),
+      make({ id: 'dup', name: '批量重复', phones: ['13800000001'], speedCode: '', emails: ['dup@example.com'] })
+    ],
+    groups: list.groups,
+    baseVersion: list.version
+  });
+  assert.equal(duplicateBulk.status, 409);
+  assert.equal((await duplicateBulk.json()).error.code, 'DUPLICATE_PHONE');
+  const afterBulk = await getList(ctx);
+  assert.equal(afterBulk.contacts.length, 2);
+  assert.equal(afterBulk.version, list.version);
 });
 
 test('非法数据返回 400，批量同步失败不会清空已有数据', async t => {
   const ctx = await start();
   t.after(() => close(ctx));
-  await fetch(`${ctx.base}/api/contacts`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(sample)
-  });
-  const invalid = await fetch(`${ctx.base}/api/contacts`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contacts: [{ name: '' }], groups: [] })
+  await sendJson(ctx, 'POST', '/api/contacts', make());
+  const list = await getList(ctx);
+  const invalid = await sendJson(ctx, 'PUT', '/api/contacts', {
+    contacts: [{ name: '' }],
+    groups: [],
+    baseVersion: list.version
   });
   assert.equal(invalid.status, 400);
   const body = await invalid.json();
   assert.equal(body.success, false);
   assert.ok(Array.isArray(body.error.details));
-  const list = (await (await fetch(`${ctx.base}/api/contacts`)).json()).data;
-  assert.equal(list.contacts.length, 1);
+  const after = await getList(ctx);
+  assert.equal(after.contacts.length, 1);
 });
 
 test('静态页面和 API 404 正常返回', async t => {

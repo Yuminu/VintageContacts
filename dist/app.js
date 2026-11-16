@@ -1,9 +1,12 @@
+import {DIAL_DIGITS,digitAngle,closestStop,snapDial} from './dial.js';
 import {STORAGE_KEY,GROUPS_KEY,HEADERS,blankContact,demoContacts,normalizeContact,cleanPhone,unique,compareNames,initial,validateContact,toExcelRows,planImport,findDialTarget} from './data.js';
+import {readSync,writeSync,clearPending,decideStartup} from './sync.js';
 
 const $=id=>document.getElementById(id);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const DEFAULT_GROUPS=['家人','朋友','大学同学','同事','老师'];
 let contacts=[],groups=[...DEFAULT_GROUPS],storageAvailable=true,serverAvailable=false,syncing=false,syncQueued=false,syncTimer,initialized=false;
+let serverVersion=0,pending=null,syncConflict=false,syncBlocked=false,localRevision=0;
 function readLocalCache(){
   try{
     const raw=localStorage.getItem(STORAGE_KEY);
@@ -11,6 +14,8 @@ function readLocalCache(){
     if(Array.isArray(parsed))contacts=parsed.map(normalizeContact);
     const savedGroups=JSON.parse(localStorage.getItem(GROUPS_KEY)||'null');
     if(Array.isArray(savedGroups))groups=unique([...groups,...savedGroups]);
+    const meta=readSync(localStorage);
+    serverVersion=meta.version;pending=meta.pending;
     storageAvailable=true;
   }catch(error){storageAvailable=false;console.warn('通讯录暂时无法读取本地存储',error);}
 }
@@ -21,10 +26,21 @@ async function loadFromServer(){
     const payload=await response.json();
     const data=payload?.data;
     if(!data||!Array.isArray(data.contacts))throw Error('云端数据格式异常');
+    const remoteVersion=Math.max(0,Number(data.version)||0);
+    serverAvailable=true;
+    if(pending){
+      serverVersion=remoteVersion;
+      const action=decideStartup({pending,remoteVersion});
+      try{writeSync(localStorage,{version:serverVersion,pending});storageAvailable=true;}catch{storageAvailable=false;}
+      if(action==='conflict'){syncConflict=true;return;}
+      syncConflict=false;
+      setTimeout(()=>toast('发现未同步的本地修改，正在同步到云端'),500);
+      return;
+    }
     contacts=data.contacts.map(normalizeContact);
     groups=unique(Array.isArray(data.groups)&&data.groups.length?data.groups:DEFAULT_GROUPS);
-    serverAvailable=true;
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));storageAvailable=true;}catch{}
+    serverVersion=remoteVersion;
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));writeSync(localStorage,{version:serverVersion,pending:null});storageAvailable=true;}catch{storageAvailable=false;}
   }catch(error){serverAvailable=false;console.warn('无法连接云端通讯录，使用本地缓存',error);}
 }
 async function initializeContacts(){
@@ -34,25 +50,80 @@ async function initializeContacts(){
   groups=unique([...groups,...contacts.map(c=>c.group)]);
   initialized=true;
   updateHome();renderDial();
-  if(!serverAvailable)setTimeout(()=>toast('云端暂时不可用，当前使用本地缓存'),700);
+  if(syncConflict)setTimeout(showSyncConflict,700);
+  else if(pending&&serverAvailable)scheduleServerSync();
+  if(!serverAvailable)setTimeout(()=>toast(pending?'云端暂时不可用，本地未同步修改已保留':'云端暂时不可用，当前使用本地缓存'),700);
   else if(!storageAvailable)setTimeout(()=>toast('浏览器存储不可用，修改会直接保存到云端'),800);
 }
 function scheduleServerSync(){
-  if(!initialized)return;
+  if(!initialized||syncBlocked)return;
   clearTimeout(syncTimer);
   syncTimer=setTimeout(syncToServer,300);
+}
+function showSyncConflict(){
+  if(dialog.open)closeDialog();
+  openDialog('云端有更新，先决定保留哪一份',`<div class="dialog-body">本机有未同步的修改，云端通讯录也已经被更新。请选择保留本机并覆盖云端，或放弃本机修改并加载云端数据。</div><div class="dialog-actions"><button class="primary-button" data-action="sync-keep-local">保留本机并覆盖云端</button><button class="secondary-button" data-action="sync-use-cloud">放弃本机并加载云端</button></div>`);
+}
+async function reloadFromCloud(){
+  try{
+    const response=await fetch('/api/contacts',{headers:{Accept:'application/json'}});
+    if(!response.ok)throw Error(`HTTP ${response.status}`);
+    const payload=await response.json();
+    const data=payload?.data;
+    if(!data||!Array.isArray(data.contacts))throw Error('云端数据格式异常');
+    contacts=data.contacts.map(normalizeContact);
+    groups=unique(Array.isArray(data.groups)&&data.groups.length?data.groups:DEFAULT_GROUPS);
+    serverVersion=Math.max(0,Number(data.version)||0);
+    pending=null;syncConflict=false;syncBlocked=false;
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));clearPending(localStorage,serverVersion);storageAvailable=true;}catch{storageAvailable=false;}
+    closeDialog();updateHome();renderDial();if(!overlay.hidden)renderDirectory();
+    toast('已加载云端通讯录');
+  }catch(error){toast(`加载云端数据失败：${error.message}`);}
 }
 async function syncToServer(){
   syncTimer=null;
   if(syncing){syncQueued=true;return;}
   syncing=true;
+  const revision=localRevision;
+  const snapshot={contacts:structuredClone(contacts),groups:[...groups]};
+  const baseVersion=pending?.baseVersion??serverVersion;
   try{
-    const response=await fetch('/api/contacts',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts,groups})});
-    if(!response.ok){let message=`HTTP ${response.status}`;try{const payload=await response.json();message=payload?.error?.message||message;}catch{}throw Error(message);}
-    serverAvailable=true;
-    if(currentView==='detail')setBookStatus('✓ 已保存到云端');
+    const response=await fetch('/api/contacts',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts:snapshot.contacts,groups:snapshot.groups,baseVersion})});
+    if(response.status===409){
+      let currentVersion=serverVersion+1;
+      try{const payload=await response.json();currentVersion=Math.max(0,Number(payload?.error?.details?.[0]?.currentVersion)||currentVersion);}catch{}
+      serverVersion=currentVersion;
+      syncConflict=true;syncBlocked=false;
+      try{writeSync(localStorage,{version:serverVersion,pending});}catch{storageAvailable=false;}
+      if(currentView==='detail')setBookStatus('云端有更新，请选择保留哪一份');
+      showSyncConflict();
+      return;
+    }
+    if(!response.ok){
+      let message=`HTTP ${response.status}`;
+      try{const payload=await response.json();message=payload?.error?.message||message;}catch{}
+      syncBlocked=true;
+      if(currentView==='detail')setBookStatus(`云端拒绝保存：${message}`);
+      toast(`云端拒绝保存：${message}`);
+      return;
+    }
+    const payload=await response.json();
+    const nextVersion=Math.max(serverVersion+1,Number(payload?.data?.version)||serverVersion+1);
+    serverVersion=nextVersion;serverAvailable=true;syncConflict=false;syncBlocked=false;
+    if(revision===localRevision){
+      pending=null;
+      try{clearPending(localStorage,nextVersion);storageAvailable=true;}catch{storageAvailable=false;}
+      if(currentView==='detail')setBookStatus('✓ 已保存到云端');
+    }else{
+      pending={dirty:true,baseVersion:nextVersion};
+      try{writeSync(localStorage,{version:nextVersion,pending});storageAvailable=true;}catch{storageAvailable=false;}
+      scheduleServerSync();
+      if(currentView==='detail')setBookStatus('已保存，继续同步最新修改…');
+    }
   }catch(error){
     serverAvailable=false;
+    if(!pending)pending={dirty:true,baseVersion:serverVersion};
+    try{writeSync(localStorage,{version:serverVersion,pending});}catch{storageAvailable=false;}
     if(currentView==='detail')setBookStatus('仅保存在本机，云端同步失败');
     toast('云端同步失败，数据已保存在本机，请检查网络');
   }finally{
@@ -61,13 +132,17 @@ async function syncToServer(){
   }
 }
 let currentView='directory',draft=null,query='',groupFilter='',saveTimer,toastTimer,dialTimer,numberTimer,ringTimer,number='',ringing=false,soundOn=false,audioContext;
-let rotation=0,dragging=false,lastAngle=0,dragStart=0,didDrag=false,selectedDigit=null,dialLocked=false;
+let rotation=0,dragging=false,lastAngle=0,didDrag=false,selectedDigit=null;
 const phoneArea=$('phoneArea'),overlay=$('bookOverlay'),dialog=$('utilityDialog');
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').hidden=false;toastTimer=setTimeout(()=>$('toast').hidden=true,3800);}
 function persist(){
   let localOk=true;
   try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));storageAvailable=true;}
   catch{storageAvailable=false;localOk=false;setBookStatus('本地存储不可用，正在保存到云端');toast('浏览器存储不可用，修改将直接保存到云端');}
+  localRevision++;
+  pending={dirty:true,baseVersion:serverVersion};
+  syncBlocked=false;
+  try{writeSync(localStorage,{version:serverVersion,pending});storageAvailable=true;}catch{storageAvailable=false;}
   scheduleServerSync();updateHome();
   return localOk||serverAvailable;
 }
@@ -85,7 +160,7 @@ function openBook(view='directory',phone=''){
 }
 function closeBook(){if(currentView==='detail'&&!flushDraft(true))return;overlay.hidden=true;document.body.style.overflow='';resetPhone();$('openBook').focus();}
 function setBookStatus(text){$('saveStatus').textContent=text;}
-function renderDirectory(){currentView='directory';draft=null;$('bookBreadcrumb').textContent='通讯录 / 扉页';setBookStatus(serverAvailable?'云端已连接':(storageAvailable?'云端未连接，使用本地缓存':'本地存储不可用，请及时导出备份'));const favorites=contacts.filter(c=>c.favorite).sort(compareNames);const recent=contacts.filter(c=>c.dialCount+c.searchCount>0).sort((a,b)=>(b.dialCount+b.searchCount)-(a.dialCount+a.searchCount)||b.lastContactAt-a.lastContactAt).slice(0,5);
+function renderDirectory(){currentView='directory';draft=null;$('bookBreadcrumb').textContent='通讯录 / 扉页';setBookStatus(serverAvailable?(syncConflict?'云端有更新，请选择保留哪一份':(pending?'本机有未同步修改，正在同步':'云端已连接')):(storageAvailable?'云端未连接，使用本地缓存':'本地存储不可用，请及时导出备份'));const favorites=contacts.filter(c=>c.favorite).sort(compareNames);const recent=contacts.filter(c=>c.dialCount+c.searchCount>0).sort((a,b)=>(b.dialCount+b.searchCount)-(a.dialCount+a.searchCount)||b.lastContactAt-a.lastContactAt).slice(0,5);
   $('leftPage').innerHTML=`<div class="page-eyebrow">ADDRESS BOOK</div><h2 class="page-heading" id="bookTitle">通讯录<span>✳</span></h2><h3 class="section-title">特别关心 <button class="plus" data-action="choose-favorites" aria-label="添加特别关心">+</button></h3><div class="favorite-list">${favorites.map(c=>personRow(c,'',true)).join('')||'<p class="paper-empty">把重要的人，夹在书签里。</p>'}</div><h3 class="section-title">最近联系的人 <small class="person-meta">常联系的前 5 位</small></h3><div class="recent-list">${recent.map(c=>personRow(c,`${c.dialCount+c.searchCount} 次`)).join('')||'<p class="paper-empty">拨个号码，或搜索一位朋友吧。</p>'}</div>`;
   $('rightPage').innerHTML=`<div class="page-eyebrow">A PLACE FOR EVERY NAME</div><h2 class="page-heading">所有联系人 <button class="small-icon" data-action="new-contact" aria-label="新增联系人">+</button></h2><div class="search-line"><span aria-hidden="true">⌕</span><input id="searchContacts" type="search" placeholder="寻找姓名、号码、邮箱或分组" aria-label="搜索联系人" value="${esc(query)}"></div><div class="directory-top"><span id="resultCount" class="person-meta"></span><button data-action="show-groups">分组索引 ↗</button></div><div id="directoryResults"></div>`;renderResults();}
 function matchesQuery(c,q){return [c.name,c.group,...c.phones,...c.emails,...c.socials.map(s=>s.value),c.address].some(s=>s.toLowerCase().includes(q));}
@@ -106,7 +181,17 @@ let pendingImport=null;
 async function readExcel(file){if(!file)return;if(!window.XLSX){toast('Excel 组件未加载，请刷新重试');return;}if(file.size>5*1024*1024){toast('文件超过 5 MB，请分批导入');return;}try{const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:false});const ws=wb.Sheets[wb.SheetNames[0]];if(!ws)throw Error('未找到工作表');const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});if(!grid.length||!grid[0].some(v=>['姓名','name'].includes(String(v).trim())))throw Error('首行需包含「姓名」列，请下载模板核对');const range=XLSX.utils.decode_range(ws['!ref']||'A1');if(range.e.r>5000)throw Error('最多支持 5000 行，请分批导入');const rows=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});if(!rows.length)throw Error('文件中没有联系人');pendingImport=planImport(rows,contacts);const {added,merged,issues}=pendingImport;openDialog('先看看，要记下哪些人',`<div class="dialog-body">文件：${esc(file.name)}<br>本次导入将新增 <strong>${added}</strong> 位、合并 <strong>${merged}</strong> 条，跳过 <strong>${issues.length}</strong> 条。</div>${issues.length?`<div class="import-report">${issues.map(esc).join('<br>')}</div>`:'<p class="small-note">✓ 每一行都检查过了。</p>'}<div class="dialog-actions"><button class="primary-button" data-action="confirm-import" ${added+merged===0?'disabled':''}>确认导入</button><button class="secondary-button" data-action="cancel-import">取消</button></div>`);}catch(error){toast(`无法导入：${error.message}`);}finally{$('excelFile').value='';}}
 
 
-let cordFrame,manualEntry=false;
+let cordFrame,manualEntry=false,phoneSession=false,idleTimer=null;
+let rawRotation=0,digitRecorded=false;
+function syncIdleTimer(restart=false){
+  const waiting=overlay.hidden&&!ringing&&(phoneSession||number!==''||manualEntry||selectedDigit!==null||dragging);
+  if(!waiting||restart){clearTimeout(idleTimer);idleTimer=null;}
+  if(!waiting||idleTimer!==null)return;
+  idleTimer=setTimeout(()=>{
+    idleTimer=null;
+    if(overlay.hidden&&!ringing){$('phoneInput').blur();resetPhone();}
+  },4000);
+}
 function animateCord(){
   cancelAnimationFrame(cordFrame);
   const until=performance.now()+1450;
@@ -120,77 +205,116 @@ function animateCord(){
 }
 
 function showNumber(){
-  const active=overlay.hidden&&!ringing&&(manualEntry||(dragging&&selectedDigit!==null));
+  const active=overlay.hidden&&!ringing&&(phoneSession||manualEntry);
   const changed=phoneArea.classList.contains('active')!==active;
   phoneArea.classList.toggle('active',active);$('numberBubble').hidden=!active;
   if(changed)animateCord();
+  syncIdleTimer();
 }
-function cancelPhoneTimers(){clearTimeout(dialTimer);clearTimeout(numberTimer);clearTimeout(ringTimer);}
-function updateNumber(value){clearTimeout(numberTimer);clearTimeout(ringTimer);ringing=false;phoneArea.classList.remove('ringing');number=value.replace(/\D/g,'').slice(0,11);$('phoneInput').value=number;showNumber();const shortMatch=number.length===3?findDialTarget(contacts,number):null;
+function cancelPhoneTimers(){clearTimeout(dialTimer);clearTimeout(numberTimer);clearTimeout(ringTimer);clearTimeout(idleTimer);idleTimer=null;}
+function updateNumber(value,userActivity=true){clearTimeout(numberTimer);clearTimeout(ringTimer);ringing=false;phoneArea.classList.remove('ringing');number=value.replace(/\D/g,'').slice(0,11);$('phoneInput').value=number;showNumber();const shortMatch=number.length===3?findDialTarget(contacts,number):null;
   $('numberHint').textContent=shortMatch?'短码已找到，2 秒后翻开联系人':number.length===11?'2 秒后，替你翻开这一页…':number.length===3?'短码未设置，可继续输入完整号码':`已记下 ${number.length} / 11 位`;
   if(number.length===11||shortMatch)numberTimer=setTimeout(startRing,2000);
+  if(userActivity)syncIdleTimer(true);
 }
-function editNumber(value){clearTimeout(dialTimer);rotation=0;selectedDigit=null;dialLocked=false;renderDial();updateNumber(value);}
-function resetPhone(){manualEntry=false;cancelPhoneTimers();number='';$('phoneInput').value='';$('numberBubble').hidden=true;phoneArea.classList.remove('active','ringing');animateCord();ringing=false;dialLocked=false;dragging=false;rotation=0;selectedDigit=null;renderDial();}
-function startRing(){if(!overlay.hidden||(number.length!==11&&!(number.length===3&&findDialTarget(contacts,number))))return;ringing=true;$('numberBubble').hidden=true;phoneArea.classList.add('ringing');animateCord();beep(880,.2);setTimeout(()=>{if(ringing)beep(740,.2);},350);ringTimer=setTimeout(()=>{const target=findDialTarget(contacts,number);const phone=number;phoneArea.classList.remove('ringing');ringing=false;if(target){recordAccess(target.id,'dial');openBook();openContact(target.id);}else{openBook('new',phone);toast('这是个新号码，为这位朋友写一页吧');}},1000);}
-const digits=['1','2','3','4','5','6','7','8','9','0'];
-function renderDial(){const holeRadius=39;$('dialDigits').style.transform=`rotate(${rotation}deg)`;$('dialDigits').innerHTML=digits.map((digit,i)=>{const angle=(-36-i*32)*Math.PI/180;return `<button class="digit-hole ${selectedDigit===digit?'chosen':''}" data-digit="${digit}" aria-label="拨数字 ${digit}" style="left:${50+Math.cos(angle)*holeRadius-9.4}%;top:${50+Math.sin(angle)*holeRadius-9.4}%"><span style="transform:rotate(${-rotation}deg)">${digit}</span></button>`;}).join('');$('dialPreview').textContent=selectedDigit??'拨';$('dialPreview').classList.toggle('numeric',selectedDigit!==null);$('dialCaption').textContent=selectedDigit?'停留 1 秒，记下数字':'转动 · 停留 · 记下';}
-function nearestDigit(){const pointer=35;let min=360,best=null;digits.forEach((d,i)=>{const angle=-36-i*32+rotation;const delta=Math.abs(((angle-pointer)%360+540)%360-180);if(delta<min){min=delta;best=d;}});return min<=14?best:null;}
-function commitDigit(digit){if(number.length>=11){dialLocked=false;rotation=0;selectedDigit=null;renderDial();return;}updateNumber(number+digit);beep(460+Number(digit)*35);$('dialCaption').textContent='记下了';dialLocked=true;clearTimeout(dialTimer);dialTimer=setTimeout(()=>{rotation=0;selectedDigit=null;dialLocked=false;renderDial();showNumber();},230);}
-function armDigit(digit){clearTimeout(dialTimer);selectedDigit=digit;renderDial();showNumber();if(digit)dialTimer=setTimeout(()=>{if(selectedDigit===digit)commitDigit(digit);},1000);}
+function editNumber(value){clearTimeout(dialTimer);digitRecorded=true;renderDial();updateNumber(value);}
+function resetPhone(){manualEntry=false;phoneSession=false;rawRotation=0;digitRecorded=false;cancelPhoneTimers();number='';$('phoneInput').value='';$('numberHint').textContent='也可以直接在这里输入';$('numberBubble').hidden=true;phoneArea.classList.remove('active','ringing');animateCord();ringing=false;dragging=false;rotation=0;selectedDigit=null;renderDial();}
+function startRing(){if(!overlay.hidden||(number.length!==11&&!(number.length===3&&findDialTarget(contacts,number))))return;ringing=true;syncIdleTimer();$('numberBubble').hidden=true;phoneArea.classList.add('ringing');animateCord();beep(880,.2);setTimeout(()=>{if(ringing)beep(740,.2);},350);ringTimer=setTimeout(()=>{const target=findDialTarget(contacts,number);const phone=number;phoneArea.classList.remove('ringing');ringing=false;if(target){recordAccess(target.id,'dial');openBook();openContact(target.id);}else{openBook('new',phone);toast('这是个新号码，为这位朋友写一页吧');}},1000);}
+const digits=DIAL_DIGITS;
+function renderDial(){
+  const holes=$('dialDigits');
+  if(!holes.children.length){
+    holes.innerHTML=digits.map((digit,i)=>{
+      const angle=digitAngle(i)*Math.PI/180;
+      return `<button class="digit-hole" data-digit="${digit}" aria-label="拨数字 ${digit}" style="left:${50+Math.cos(angle)*39-9.4}%;top:${50+Math.sin(angle)*39-9.4}%"><span>${digit}</span></button>`;
+    }).join('');
+  }
+  holes.style.transform=`rotate(${rotation}deg)`;
+  for(const hole of holes.children){
+    hole.classList.toggle('chosen',hole.dataset.digit===selectedDigit);
+    hole.setAttribute('aria-pressed',String(hole.dataset.digit===selectedDigit));
+    hole.firstElementChild.style.transform=`rotate(${-rotation}deg)`;
+  }
+  $('dialPreview').textContent=selectedDigit??'拨';
+  $('dialPreview').classList.toggle('numeric',selectedDigit!==null);
+  $('dialCaption').textContent=selectedDigit?(digitRecorded?'已记下，再转一格':'停留 1 秒，记下数字'):'转动 · 停留 · 记下';
+  syncIdleTimer();
+}
+function commitDigit(digit){
+  if(digit!==selectedDigit||digitRecorded||number.length>=11)return;
+  digitRecorded=true;updateNumber(number+digit,false);renderDial();beep(460+Number(digit)*35);
+}
+function armDigit(digit,force=false){
+  if(digit===selectedDigit&&!force)return;
+  clearTimeout(dialTimer);selectedDigit=digit;digitRecorded=false;
+  renderDial();showNumber();
+  dialTimer=setTimeout(()=>commitDigit(digit),1000);
+}
 function dialAngle(event){const rect=$('rotary').getBoundingClientRect();return Math.atan2(event.clientY-(rect.top+rect.height/2),event.clientX-(rect.left+rect.width/2))*180/Math.PI;}
 $('rotary').addEventListener('pointerdown',event=>{
-  if(dialLocked||ringing||number.length>=11)return;
-  if(event.target.closest('.dial-center'))return;
-  manualEntry=false;$('phoneInput').blur();clearTimeout(dialTimer);
-  dragging=true;didDrag=false;selectedDigit=null;dragStart=lastAngle=dialAngle(event);
-  $('rotary').setPointerCapture(event.pointerId);showNumber();
+  if(ringing||number.length>=11)return;
+  manualEntry=false;phoneSession=true;$('phoneInput').blur();clearTimeout(dialTimer);
+  dragging=true;didDrag=false;rawRotation=rotation;lastAngle=dialAngle(event);
+  $('rotary').setPointerCapture(event.pointerId);showNumber();syncIdleTimer(true);
 });
 $('rotary').addEventListener('pointermove',event=>{
-  if(!dragging||dialLocked)return;
+  if(!dragging||ringing)return;
   const angle=dialAngle(event);let delta=angle-lastAngle;
   if(delta>180)delta-=360;if(delta< -180)delta+=360;lastAngle=angle;
   const rect=$('rotary').getBoundingClientRect();
   const radius=Math.hypot(event.clientX-rect.left-rect.width/2,event.clientY-rect.top-rect.height/2)/rect.width;
-  if(radius<.28||radius>.51){armDigit(null);return;}
-  if(Math.abs(angle-dragStart)>3)didDrag=true;if(!didDrag)return;
-  rotation+=delta;const digit=nearestDigit();
-  if(digit!==selectedDigit)armDigit(digit);
-  else{renderDial();if(Math.abs(delta)>.25)armDigit(digit);}
+  if(radius<.28||radius>.56)return;
+  if(Math.abs(delta)>.2)syncIdleTimer(true);
+  rawRotation+=delta;
+  const firstMove=!didDrag;
+  if(Math.abs(rawRotation-rotation)>3)didDrag=true;
+  if(!didDrag)return;
+  const snapped=snapDial(rawRotation,selectedDigit),changed=snapped.digit!==selectedDigit;
+  rotation=snapped.rotation;
+  if(changed){beep(250,.025);armDigit(snapped.digit);}
+  else if(firstMove)armDigit(snapped.digit,true);
 });
 $('rotary').addEventListener('pointerup',event=>{
   if(!dragging)return;dragging=false;
   if($('rotary').hasPointerCapture(event.pointerId))$('rotary').releasePointerCapture(event.pointerId);
-  if(didDrag){
-    if(!dialLocked){clearTimeout(dialTimer);rotation=0;selectedDigit=null;renderDial();}
-  }else{
+  if(!didDrag){
     const hole=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-digit]');
     if(hole)selectDialDigit(hole.dataset.digit);
   }
-  showNumber();
+  showNumber();syncIdleTimer(true);
 });
 $('rotary').addEventListener('pointercancel',()=>{
-  dragging=false;clearTimeout(dialTimer);selectedDigit=null;rotation=0;dialLocked=false;renderDial();showNumber();
+  clearTimeout(dialTimer);dragging=false;showNumber();syncIdleTimer(true);
 });
-function selectDialDigit(digit){if(dialLocked||ringing||number.length>=11)return;showNumber();const i=digits.indexOf(digit);rotation=35-(-36-i*32);armDigit(digit);}
-$('rotary').addEventListener('click',event=>{if(event.detail===0){const digit=event.target.closest('[data-digit]')?.dataset.digit;if(digit)selectDialDigit(digit);}});
-$('liftHandset').onclick=()=>{if(!ringing){manualEntry=true;showNumber();$('phoneInput').focus();}};
-$('numberBubble').addEventListener('focusin',()=>{manualEntry=true;showNumber();});
+function selectDialDigit(digit){
+  if(ringing||number.length>=11)return;
+  phoneSession=true;rotation=closestStop(rotation,digit);rawRotation=rotation;
+  armDigit(digit,true);showNumber();syncIdleTimer(true);beep(250,.025);
+}
+$('rotary').addEventListener('click',event=>{
+  if(event.detail===0){const digit=event.target.closest('[data-digit]')?.dataset.digit;if(digit)selectDialDigit(digit);}
+});
+$('liftHandset').onclick=()=>{if(!ringing){manualEntry=true;phoneSession=true;showNumber();syncIdleTimer(true);$('phoneInput').focus();}};
+$('numberBubble').addEventListener('focusin',()=>{manualEntry=true;phoneSession=true;showNumber();});
 $('numberBubble').addEventListener('focusout',event=>{
   if(event.relatedTarget&&$('numberBubble').contains(event.relatedTarget))return;
   setTimeout(()=>{if(!$('numberBubble').contains(document.activeElement)){manualEntry=false;showNumber();}},0);
 });
 document.addEventListener('pointerdown',event=>{
-  if(manualEntry&&!$('numberBubble').contains(event.target)&&!event.target.closest('#liftHandset')){
-    manualEntry=false;showNumber();
-  }
+  if(!overlay.hidden||dialog.open||(!phoneSession&&!manualEntry&&!ringing))return;
+  if(event.target.closest('#rotary,#numberBubble,#liftHandset'))return;
+  clearTimeout(dialTimer);clearTimeout(numberTimer);clearTimeout(ringTimer);
+  manualEntry=false;phoneSession=false;dragging=false;ringing=false;
+  phoneArea.classList.remove('ringing');$('phoneInput').blur();showNumber();
 });
-$('phoneInput').addEventListener('input',e=>{clearTimeout(dialTimer);rotation=0;selectedDigit=null;dialLocked=false;renderDial();updateNumber(e.target.value);});$('backspace').onclick=()=>editNumber(number.slice(0,-1));$('clearNumber').onclick=()=>{editNumber('');$('phoneInput').focus();};
+$('phoneInput').addEventListener('input',event=>editNumber(event.target.value));
+$('backspace').onclick=()=>{editNumber(number.slice(0,-1));$('phoneInput').focus();};
+$('clearNumber').onclick=()=>{editNumber('');$('phoneInput').focus();};
 document.addEventListener('keydown',event=>{
   if(!overlay.hidden||dialog.open||ringing||event.ctrlKey||event.metaKey||event.altKey)return;
   if(event.target.closest('input,textarea,select,[contenteditable="true"]'))return;
   if(/^\d$/.test(event.key)){
-    event.preventDefault();manualEntry=true;editNumber(number+event.key);$('phoneInput').focus();
+    event.preventDefault();manualEntry=true;phoneSession=true;editNumber(number+event.key);$('phoneInput').focus();
   }
 });
 $('soundButton').onclick=()=>{soundOn=!soundOn;$('soundButton').classList.toggle('sound-on',soundOn);$('soundButton').setAttribute('aria-label',soundOn?'关闭音效':'开启音效');$('soundButton').title=soundOn?'关闭音效':'开启音效';beep();toast(soundOn?'拨号音效已开启':'拨号音效已关闭');};
@@ -203,6 +327,8 @@ document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!dialog.ope
 dialog.addEventListener('click',event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeDialog();}});
 document.addEventListener('click',event=>{const target=event.target.closest('[data-action]');if(!target)return;const action=target.dataset.action;switch(action){
   case 'close-dialog':closeDialog();break;
+  case 'sync-keep-local':{closeDialog();pending={dirty:true,baseVersion:serverVersion};syncConflict=false;syncBlocked=false;try{writeSync(localStorage,{version:serverVersion,pending});}catch{}scheduleServerSync();toast('正在用本机数据覆盖云端');break;}
+  case 'sync-use-cloud':reloadFromCloud();break;
   case 'clear-demo':{const n=contacts.filter(c=>c.demo).length;if(!n){toast('没有未修改的示例联系人');break;}openDialog('移除示例联系人？',`<div class="dialog-body">将移除 ${n} 位未修改的虚构示例联系人，你编辑过的记录会保留。</div><div class="dialog-actions"><button class="primary-button" data-action="confirm-clear-demo">移除示例</button><button class="secondary-button" data-action="close-dialog">保留</button></div>`);break;}
   case 'confirm-clear-demo':{const before=contacts;contacts=contacts.filter(c=>!c.demo);if(persist()){closeDialog();if(!overlay.hidden)renderDirectory();toast('示例已移除，可以写自己的通讯录了');}else contacts=before;break;}
   case 'open-contact':openContact(target.dataset.id,!!query.trim());break;
@@ -237,5 +363,4 @@ document.addEventListener('click',event=>{const target=event.target.closest('[da
 document.addEventListener('keydown',event=>{if(event.key!=='Tab'||overlay.hidden||dialog.open)return;const focusables=[...overlay.querySelectorAll('button,input,select,textarea')].filter(el=>!el.disabled&&el.getClientRects().length);const first=focusables[0],last=focusables.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}});
 window.addEventListener('beforeunload',event=>{if(draft&&!flushDraft()){event.preventDefault();event.returnValue='';}});
 renderDial();initializeContacts();
-window.addEventListener('online',()=>{if(initialized)scheduleServerSync();});
-window.addEventListener('beforeunload',()=>{if(!initialized||!syncTimer)return;clearTimeout(syncTimer);try{void fetch('/api/contacts',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts,groups}),keepalive:true});}catch{}});
+window.addEventListener('online',()=>{if(initialized&&pending&&!syncConflict)scheduleServerSync();});

@@ -10,6 +10,7 @@ import {
   getContact,
   getContacts,
   getGroups,
+  getVersion,
   replaceAll,
   setFavorite,
   updateContact
@@ -63,13 +64,13 @@ export function createApp({ db, distDir = defaultDist, rateLimitEnabled = true }
   app.get('/api/health', health);
 
   app.get('/api/contacts', (req, res) => {
-    res.json({ success: true, data: { contacts: getContacts(db), groups: getGroups(db) } });
+    res.json({ success: true, data: { contacts: getContacts(db), groups: getGroups(db), version: getVersion(db) } });
   });
 
   app.put('/api/contacts', (req, res) => {
     const payload = parse(contactsPayloadSchema, req.body);
-    const count = replaceAll(db, payload.contacts, payload.groups);
-    res.json({ success: true, data: { count } });
+    const result = replaceAll(db, payload.contacts, payload.groups, payload.baseVersion);
+    res.json({ success: true, data: result });
   });
 
   app.get('/api/contacts/:id', (req, res) => {
@@ -83,36 +84,37 @@ export function createApp({ db, distDir = defaultDist, rateLimitEnabled = true }
 
   app.post('/api/contacts', (req, res) => {
     const contact = parse(contactSchema, req.body);
-    const created = createContact(db, contact);
-    res.status(201).json({ success: true, data: created, message: '联系人已创建' });
+    const result = createContact(db, contact);
+    res.status(201).json({ success: true, data: result.contact, version: result.version, message: '联系人已创建' });
   });
 
   app.put('/api/contacts/:id', (req, res) => {
     const contact = parse(contactSchema, req.body);
-    const updated = updateContact(db, req.params.id, contact);
-    if (!updated) {
+    const result = updateContact(db, req.params.id, contact);
+    if (!result) {
       res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '联系人不存在' } });
       return;
     }
-    res.json({ success: true, data: updated, message: '联系人已更新' });
+    res.json({ success: true, data: result.contact, version: result.version, message: '联系人已更新' });
   });
 
   app.delete('/api/contacts/:id', (req, res) => {
-    if (!deleteContact(db, req.params.id)) {
+    const result = deleteContact(db, req.params.id);
+    if (!result) {
       res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '联系人不存在' } });
       return;
     }
-    res.json({ success: true, data: { id: req.params.id }, message: '联系人已删除' });
+    res.json({ success: true, data: { id: req.params.id }, version: result.version, message: '联系人已删除' });
   });
 
   app.patch('/api/contacts/:id/favorite', (req, res) => {
     const payload = parse(favoritePayloadSchema, req.body);
-    const updated = setFavorite(db, req.params.id, payload.isFavorite);
-    if (!updated) {
+    const result = setFavorite(db, req.params.id, payload.isFavorite);
+    if (!result) {
       res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '联系人不存在' } });
       return;
     }
-    res.json({ success: true, data: updated, message: '收藏状态已更新' });
+    res.json({ success: true, data: result.contact, version: result.version, message: '收藏状态已更新' });
   });
 
   app.use(express.static(distDir, { index: 'index.html', etag: true, maxAge: 0 }));

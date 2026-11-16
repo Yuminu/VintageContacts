@@ -12,7 +12,7 @@ Environment=HOST=127.0.0.1
 Environment=PORT=4173
 Environment=DB_PATH=/var/lib/vintagecontacts/contacts.sqlite
 Environment=SEED_DEMO=true
-ExecStart=/usr/bin/node server/index.js
+ExecStart=/opt/node24/bin/node server/index.js
 Restart=on-failure
 RestartSec=3
 

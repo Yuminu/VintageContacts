@@ -24,7 +24,8 @@ export const contactSchema = z.object({
 
 export const contactsPayloadSchema = z.object({
   contacts: z.array(contactSchema).max(5000),
-  groups: z.array(z.string().trim().min(1).max(30)).max(100).default([])
+  groups: z.array(z.string().trim().min(1).max(30)).max(100).default([]),
+  baseVersion: z.number().int().min(0)
 });
 
 export const favoritePayloadSchema = z.object({

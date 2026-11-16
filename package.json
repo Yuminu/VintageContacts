@@ -7,8 +7,9 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "test": "node --test tests/data.test.mjs tests/server.test.mjs",
+    "test": "node --test",
     "test:data": "node --test tests/data.test.mjs",
+    "test:dial": "node --test tests/dial.test.mjs",
     "test:server": "node --test tests/server.test.mjs"
   },
   "engines": {
