@@ -1,12 +1,12 @@
 import {DIAL_DIGITS,digitAngle,closestStop,snapDial} from './dial.js';
 import {STORAGE_KEY,GROUPS_KEY,HEADERS,blankContact,demoContacts,normalizeContact,cleanPhone,unique,compareNames,initial,validateContact,toExcelRows,planImport,findDialTarget} from './data.js';
-import {readSync,writeSync,clearPending,decideStartup} from './sync.js';
+import {readSync,writeSync,clearPending,decideStartup,baseVersionForSave} from './sync.js';
 
 const $=id=>document.getElementById(id);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const DEFAULT_GROUPS=['家人','朋友','大学同学','同事','老师'];
 let contacts=[],groups=[...DEFAULT_GROUPS],storageAvailable=true,serverAvailable=false,syncing=false,syncQueued=false,syncTimer,initialized=false;
-let serverVersion=0,pending=null,syncConflict=false,syncBlocked=false,localRevision=0;
+let serverVersion=0,pending=null,syncConflict=false,syncBlocked=false,conflictVersion=0,localRevision=0;
 function readLocalCache(){
   try{
     const raw=localStorage.getItem(STORAGE_KEY);
@@ -15,7 +15,8 @@ function readLocalCache(){
     const savedGroups=JSON.parse(localStorage.getItem(GROUPS_KEY)||'null');
     if(Array.isArray(savedGroups))groups=unique([...groups,...savedGroups]);
     const meta=readSync(localStorage);
-    serverVersion=meta.version;pending=meta.pending;
+    serverVersion=meta.pending?meta.pending.baseVersion:meta.version;
+    pending=meta.pending;
     storageAvailable=true;
   }catch(error){storageAvailable=false;console.warn('通讯录暂时无法读取本地存储',error);}
 }
@@ -29,11 +30,17 @@ async function loadFromServer(){
     const remoteVersion=Math.max(0,Number(data.version)||0);
     serverAvailable=true;
     if(pending){
-      serverVersion=remoteVersion;
       const action=decideStartup({pending,remoteVersion});
-      try{writeSync(localStorage,{version:serverVersion,pending});storageAvailable=true;}catch{storageAvailable=false;}
-      if(action==='conflict'){syncConflict=true;return;}
+      if(action==='conflict'){
+        serverVersion=pending.baseVersion;
+        conflictVersion=remoteVersion;
+        syncConflict=true;
+        try{writeSync(localStorage,{version:serverVersion,pending});storageAvailable=true;}catch{storageAvailable=false;}
+        return;
+      }
+      serverVersion=remoteVersion;
       syncConflict=false;
+      try{writeSync(localStorage,{version:serverVersion,pending});storageAvailable=true;}catch{storageAvailable=false;}
       setTimeout(()=>toast('发现未同步的本地修改，正在同步到云端'),500);
       return;
     }
@@ -56,7 +63,7 @@ async function initializeContacts(){
   else if(!storageAvailable)setTimeout(()=>toast('浏览器存储不可用，修改会直接保存到云端'),800);
 }
 function scheduleServerSync(){
-  if(!initialized||syncBlocked)return;
+  if(!initialized||syncBlocked||syncConflict)return;
   clearTimeout(syncTimer);
   syncTimer=setTimeout(syncToServer,300);
 }
@@ -74,7 +81,7 @@ async function reloadFromCloud(){
     contacts=data.contacts.map(normalizeContact);
     groups=unique(Array.isArray(data.groups)&&data.groups.length?data.groups:DEFAULT_GROUPS);
     serverVersion=Math.max(0,Number(data.version)||0);
-    pending=null;syncConflict=false;syncBlocked=false;
+    pending=null;syncConflict=false;syncBlocked=false;conflictVersion=0;
     try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));clearPending(localStorage,serverVersion);storageAvailable=true;}catch{storageAvailable=false;}
     closeDialog();updateHome();renderDial();if(!overlay.hidden)renderDirectory();
     toast('已加载云端通讯录');
@@ -92,7 +99,7 @@ async function syncToServer(){
     if(response.status===409){
       let currentVersion=serverVersion+1;
       try{const payload=await response.json();currentVersion=Math.max(0,Number(payload?.error?.details?.[0]?.currentVersion)||currentVersion);}catch{}
-      serverVersion=currentVersion;
+      conflictVersion=currentVersion;
       syncConflict=true;syncBlocked=false;
       try{writeSync(localStorage,{version:serverVersion,pending});}catch{storageAvailable=false;}
       if(currentView==='detail')setBookStatus('云端有更新，请选择保留哪一份');
@@ -109,7 +116,7 @@ async function syncToServer(){
     }
     const payload=await response.json();
     const nextVersion=Math.max(serverVersion+1,Number(payload?.data?.version)||serverVersion+1);
-    serverVersion=nextVersion;serverAvailable=true;syncConflict=false;syncBlocked=false;
+    serverVersion=nextVersion;serverAvailable=true;syncConflict=false;syncBlocked=false;conflictVersion=0;
     if(revision===localRevision){
       pending=null;
       try{clearPending(localStorage,nextVersion);storageAvailable=true;}catch{storageAvailable=false;}
@@ -140,10 +147,12 @@ function persist(){
   try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));storageAvailable=true;}
   catch{storageAvailable=false;localOk=false;setBookStatus('本地存储不可用，正在保存到云端');toast('浏览器存储不可用，修改将直接保存到云端');}
   localRevision++;
-  pending={dirty:true,baseVersion:serverVersion};
+  const baseVersion=baseVersionForSave({syncConflict,pending,serverVersion});
+  pending={dirty:true,baseVersion};
   syncBlocked=false;
   try{writeSync(localStorage,{version:serverVersion,pending});storageAvailable=true;}catch{storageAvailable=false;}
-  scheduleServerSync();updateHome();
+  if(!syncConflict)scheduleServerSync();
+  updateHome();
   return localOk||serverAvailable;
 }
 function updateHome(){ $('contactCount').textContent=`${contacts.length} 位联系人`;$('miniNames').innerHTML='<span>一些名字<small>分组</small></span><span>一些名字<small>分组</small></span><span>一些名字<small>分组</small></span>'; }
@@ -166,12 +175,12 @@ function renderDirectory(){currentView='directory';draft=null;$('bookBreadcrumb'
 function matchesQuery(c,q){return [c.name,c.group,...c.phones,...c.emails,...c.socials.map(s=>s.value),c.address].some(s=>s.toLowerCase().includes(q));}
 function renderResults(){const q=query.trim().toLowerCase();const filtered=contacts.filter(c=>(!groupFilter||c.group===groupFilter)&&(!q||matchesQuery(c,q))).sort(compareNames);$('resultCount').textContent=`${groupFilter?groupFilter+' · ':''}${filtered.length} 位联系人${contacts.some(c=>c.demo)?' · 含示例':''}`;const buckets=new Map();filtered.forEach(c=>{const letter=initial(c.name);if(!buckets.has(letter))buckets.set(letter,[]);buckets.get(letter).push(c);});const keys=[...buckets.keys()].sort((a,b)=>a==='#'?1:b==='#'?-1:a.localeCompare(b));$('directoryResults').innerHTML=`${groupFilter?'<button class="back-button" data-action="all-groups">← 显示所有联系人</button>':''}<div class="contact-scroll"><nav class="alphabet" aria-label="字母索引">${keys.map(k=>`<button data-action="jump-letter" data-letter="${k}">${k}</button>`).join('')}</nav><div class="directory-list">${keys.map(k=>`<div class="letter-heading" id="letter-${k==='#'?'other':k}">${k}</div>${buckets.get(k).map(c=>personRow(c)).join('')}`).join('')||'<div class="paper-empty">这一页还没有名字。<br>点击右上角 +，写下一段新的联系。</div>'}</div></div>`;}
 function openContact(id,countSearch=false){if(currentView==='detail'&&!flushDraft(true))return;const c=contacts.find(c=>c.id===id);if(!c)return;if(countSearch)recordAccess(id,'search');draft=structuredClone(c);if(!draft.phones.length)draft.phones=[''];if(!draft.emails.length)draft.emails=[''];if(!draft.socials.length)draft.socials=[{platform:'微信',value:''}];currentView='detail';renderDetail();}
-function renderDetail(){if(!draft)return;const isNew=!contacts.some(c=>c.id===draft.id);$('bookBreadcrumb').textContent=`通讯录 / ${isNew?'新的一页':draft.name}`;setBookStatus(isNew?'写下姓名后，自动保存':'已保存');$('leftPage').innerHTML=`<button class="back-button" data-action="back-directory">← 回到通讯录</button><div class="page-eyebrow">LITTLE THINGS TO REMEMBER</div><h2 class="notes-label" id="bookTitle">关于这个人</h2><textarea class="notes-textarea" data-field="notes" aria-label="联系人备注" placeholder="记一件小事，或下一次见面的约定……">${esc(draft.notes)}</textarea>`;
+function renderDetail(){if(!draft)return;const isNew=!contacts.some(c=>c.id===draft.id);$('bookBreadcrumb').textContent=`通讯录 / ${isNew?'新的一页':draft.name}`;setBookStatus(isNew?'写下姓名后，自动保存':(syncConflict?'冲突未解决，修改仅保存在本机':'已保存'));$('leftPage').innerHTML=`<button class="back-button" data-action="back-directory">← 回到通讯录</button><div class="page-eyebrow">LITTLE THINGS TO REMEMBER</div><h2 class="notes-label" id="bookTitle">关于这个人</h2><textarea class="notes-textarea" data-field="notes" aria-label="联系人备注" placeholder="记一件小事，或下一次见面的约定……">${esc(draft.notes)}</textarea>`;
   const groupOptions=unique([...groups,draft.group]);$('rightPage').innerHTML=`<button class="favorite-ribbon ${draft.favorite?'selected':''}" data-action="toggle-favorite" aria-label="${draft.favorite?'取消':'标记'}特别关心" aria-pressed="${draft.favorite}">特别关心</button><div class="page-eyebrow">A PAGE JUST FOR YOU</div><h2 class="detail-title">${isNew?'新的一位朋友':esc(draft.name)}</h2><div class="field"><label for="contactName">姓名 *</label><input id="contactName" data-field="name" value="${esc(draft.name)}" maxlength="60" placeholder="怎么称呼这位朋友"></div><div class="field"><label for="contactSpeedCode">键盘短码（3 位，选填）</label><input id="contactSpeedCode" data-field="speedCode" type="text" inputmode="numeric" maxlength="3" pattern="[0-9]{3}" value="${esc(draft.speedCode)}" placeholder="例如 001"></div><div class="field"><label for="contactGroup">分组</label><select id="contactGroup" data-field="group">${groupOptions.map(g=>`<option ${draft.group===g?'selected':''}>${esc(g)}</option>`).join('')}</select></div><div class="field"><div class="field-header"><label>电话号码</label><button data-action="add-phone" aria-label="添加电话号码">+</button></div><div id="phoneFields">${draft.phones.map((p,i)=>repeatPhone(p,i)).join('')}</div></div><div class="field"><div class="field-header"><label>电子邮箱</label><button data-action="add-email" aria-label="添加电子邮箱">+</button></div><div id="emailFields">${draft.emails.map((p,i)=>repeatEmail(p,i)).join('')}</div></div><div class="field"><div class="field-header"><label>社交媒体账号</label><button data-action="add-social" aria-label="添加社交媒体账号">+</button></div><div id="socialFields">${draft.socials.map((s,i)=>repeatSocial(s,i)).join('')}</div></div><div class="field"><label for="contactAddress">通讯地址</label><textarea id="contactAddress" data-field="address" rows="1" maxlength="500" placeholder="寄一封信也能找到的地方">${esc(draft.address)}</textarea></div><div id="formErrors" class="error-text" role="status"></div><div class="detail-actions"><span>自动保存</span>${isNew?'<button data-action="discard-draft">放弃这一页</button>':'<button class="delete-contact" data-action="delete-contact">删除联系人</button>'}</div>`;}
 function repeatPhone(p,i){return `<div class="repeat-row"><input type="tel" inputmode="tel" data-array="phones" data-index="${i}" value="${esc(p)}" aria-label="电话号码 ${i+1}" placeholder="电话号码" maxlength="35"><button class="remove-field" data-action="remove-phone" data-index="${i}" aria-label="移除此电话号码">−</button></div>`;}
 function repeatEmail(p,i){return `<div class="repeat-row"><input type="email" data-array="emails" data-index="${i}" value="${esc(p)}" aria-label="电子邮箱 ${i+1}" placeholder="name@example.com" maxlength="150"><button class="remove-field" data-action="remove-email" data-index="${i}" aria-label="移除此邮箱">−</button></div>`;}
 function repeatSocial(s,i){const platforms=unique(['微信','QQ','微博','Instagram','GitHub','其他',s.platform]);return `<div class="repeat-row"><select data-social="platform" data-index="${i}" aria-label="社交平台 ${i+1}">${platforms.map(p=>`<option ${s.platform===p?'selected':''}>${esc(p)}</option>`).join('')}</select><input data-social="value" data-index="${i}" value="${esc(s.value)}" aria-label="社交账号 ${i+1}" placeholder="写下账号" maxlength="200"><button class="remove-field" data-action="remove-social" data-index="${i}" aria-label="移除此社交账号">−</button></div>`;}
-function flushDraft(leaving=false){clearTimeout(saveTimer);if(!draft)return true;const isNew=!contacts.some(c=>c.id===draft.id);const meaningful=[draft.name,draft.speedCode||'',draft.notes,draft.address,...draft.phones,...draft.emails,...draft.socials.map(s=>s.value)].some(s=>s.trim());if(isNew&&!meaningful)return true;const errors=validateContact(draft,contacts);$('formErrors')&&( $('formErrors').textContent=Object.values(errors).join('；'));if(Object.keys(errors).length){setBookStatus(isNew&&!draft.name.trim()?'请写下姓名，再记下这位朋友':'尚未保存，请检查填写内容');if(leaving){toast(Object.values(errors)[0]);const bad=$('rightPage').querySelector(errors.name?'[data-field="name"]':errors.speedCode?'[data-field="speedCode"]':errors.phones?'[data-array="phones"]':'[data-array="emails"]');bad?.focus();}return false;}const normalized=normalizeContact({...draft,updatedAt:Date.now(),demo:false});const i=contacts.findIndex(c=>c.id===normalized.id);const previous=i>=0?contacts[i]:null;if(i<0)contacts.push(normalized);else contacts[i]=normalized;if(!persist()){if(i<0)contacts.pop();else contacts[i]=previous;return false;}setBookStatus('✓ 已保存');document.querySelector('.detail-title').textContent=draft.name;if(isNew)document.querySelector('.detail-actions').innerHTML='<span>自动保存</span><button class="delete-contact" data-action="delete-contact">删除联系人</button>';$('bookBreadcrumb').textContent=`通讯录 / ${draft.name}`;return true;}
+function flushDraft(leaving=false){clearTimeout(saveTimer);if(!draft)return true;const isNew=!contacts.some(c=>c.id===draft.id);const meaningful=[draft.name,draft.speedCode||'',draft.notes,draft.address,...draft.phones,...draft.emails,...draft.socials.map(s=>s.value)].some(s=>s.trim());if(isNew&&!meaningful)return true;const errors=validateContact(draft,contacts);$('formErrors')&&( $('formErrors').textContent=Object.values(errors).join('；'));if(Object.keys(errors).length){setBookStatus(isNew&&!draft.name.trim()?'请写下姓名，再记下这位朋友':'尚未保存，请检查填写内容');if(leaving){toast(Object.values(errors)[0]);const bad=$('rightPage').querySelector(errors.name?'[data-field="name"]':errors.speedCode?'[data-field="speedCode"]':errors.phones?'[data-array="phones"]':'[data-array="emails"]');bad?.focus();}return false;}const normalized=normalizeContact({...draft,updatedAt:Date.now(),demo:false});const i=contacts.findIndex(c=>c.id===normalized.id);const previous=i>=0?contacts[i]:null;if(i<0)contacts.push(normalized);else contacts[i]=normalized;if(!persist()){if(i<0)contacts.pop();else contacts[i]=previous;return false;}setBookStatus(syncConflict?'云端有更新，冲突未解决，修改仅保存在本机':'✓ 已保存');document.querySelector('.detail-title').textContent=draft.name;if(isNew)document.querySelector('.detail-actions').innerHTML='<span>自动保存</span><button class="delete-contact" data-action="delete-contact">删除联系人</button>';$('bookBreadcrumb').textContent=`通讯录 / ${draft.name}`;return true;}
 function editDraft(target){if(!draft)return;if(target.dataset.field)draft[target.dataset.field]=target.value;if(target.dataset.array)draft[target.dataset.array][+target.dataset.index]=target.value;if(target.dataset.social)draft.socials[+target.dataset.index][target.dataset.social]=target.value;clearTimeout(saveTimer);setBookStatus('正在记下…');saveTimer=setTimeout(()=>flushDraft(),450);}
 function showGroups(){currentView='groups';draft=null;$('bookBreadcrumb').textContent='通讯录 / 分组索引';$('rightPage').innerHTML=`<div class="page-eyebrow">EVERY CIRCLE HAS A STORY</div><h2 class="page-heading">分组索引 <button class="small-icon" data-action="new-group" aria-label="新建分组">+</button></h2><p class="page-subtitle">给不同阶段相识的人，留一页位置。</p>${groups.map(g=>`<div class="group-row"><button data-action="filter-group" data-group="${esc(g)}">${esc(g)}</button><small>${contacts.filter(c=>c.group===g).length} 人</small><button class="remove-group" data-action="delete-group" data-group="${esc(g)}" aria-label="删除分组 ${esc(g)}">×</button></div>`).join('')}<button class="back-button" style="margin-top:25px" data-action="back-directory">← 所有联系人</button>`;}
 function chooseFavorites(){openDialog('把重要的人夹在书签里',`<div class="choose-list">${contacts.slice().sort(compareNames).map(c=>`<label class="choose-row"><input type="checkbox" data-favorite-id="${esc(c.id)}" ${c.favorite?'checked':''}><span>${esc(c.name)}</span><small class="person-meta">${esc(c.group)}</small></label>`).join('')||'<p class="paper-empty">先写下一位联系人吧。</p>'}</div><div class="dialog-actions"><button class="primary-button" data-action="save-favorites">夹好书签</button></div>`);}
@@ -327,7 +336,7 @@ document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!dialog.ope
 dialog.addEventListener('click',event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeDialog();}});
 document.addEventListener('click',event=>{const target=event.target.closest('[data-action]');if(!target)return;const action=target.dataset.action;switch(action){
   case 'close-dialog':closeDialog();break;
-  case 'sync-keep-local':{closeDialog();pending={dirty:true,baseVersion:serverVersion};syncConflict=false;syncBlocked=false;try{writeSync(localStorage,{version:serverVersion,pending});}catch{}scheduleServerSync();toast('正在用本机数据覆盖云端');break;}
+  case 'sync-keep-local':{closeDialog();const baseVersion=conflictVersion||serverVersion;serverVersion=baseVersion;pending={dirty:true,baseVersion};syncConflict=false;syncBlocked=false;conflictVersion=0;try{writeSync(localStorage,{version:serverVersion,pending});}catch{}scheduleServerSync();toast('正在用本机数据覆盖云端');break;}
   case 'sync-use-cloud':reloadFromCloud();break;
   case 'clear-demo':{const n=contacts.filter(c=>c.demo).length;if(!n){toast('没有未修改的示例联系人');break;}openDialog('移除示例联系人？',`<div class="dialog-body">将移除 ${n} 位未修改的虚构示例联系人，你编辑过的记录会保留。</div><div class="dialog-actions"><button class="primary-button" data-action="confirm-clear-demo">移除示例</button><button class="secondary-button" data-action="close-dialog">保留</button></div>`);break;}
   case 'confirm-clear-demo':{const before=contacts;contacts=contacts.filter(c=>!c.demo);if(persist()){closeDialog();if(!overlay.hidden)renderDirectory();toast('示例已移除，可以写自己的通讯录了');}else contacts=before;break;}

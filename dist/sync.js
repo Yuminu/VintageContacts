@@ -39,3 +39,8 @@ export function decideStartup({ pending, remoteVersion } = {}) {
   if (Number(pending.baseVersion) === Number(remoteVersion)) return 'sync-local';
   return 'conflict';
 }
+
+export function baseVersionForSave({ syncConflict = false, pending = null, serverVersion = 0 } = {}) {
+  if (syncConflict && pending?.dirty) return Math.max(0, Number(pending.baseVersion) || 0);
+  return Math.max(0, Number(serverVersion) || 0);
+}

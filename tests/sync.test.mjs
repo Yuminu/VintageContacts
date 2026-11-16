@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readSync, writeSync, markPending, clearPending, decideStartup, SYNC_KEY } from '../dist/sync.js';
+import { readSync, writeSync, markPending, clearPending, decideStartup, baseVersionForSave, SYNC_KEY } from '../dist/sync.js';
 
 function memoryStorage() {
   const values = new Map();
@@ -35,4 +35,13 @@ test('启动时根据 pending 基础版本决定读取云端、补传本地或�
   assert.equal(decideStartup({ pending: { dirty: true, baseVersion: 5 }, remoteVersion: 5 }), 'sync-local');
   assert.equal(decideStartup({ pending: { dirty: true, baseVersion: 0 }, remoteVersion: 0 }), 'sync-local');
   assert.equal(decideStartup({ pending: { dirty: true, baseVersion: 4 }, remoteVersion: 5 }), 'conflict');
+});
+
+test('冲突未解决时继续编辑仍使用原始 baseVersion，不能自动覆盖云端', () => {
+  const pending = { dirty: true, baseVersion: 5 };
+  assert.equal(baseVersionForSave({ syncConflict: true, pending, serverVersion: 6 }), 5);
+  assert.equal(baseVersionForSave({ syncConflict: false, pending, serverVersion: 6 }), 6);
+  assert.equal(baseVersionForSave({ syncConflict: true, pending: null, serverVersion: 6 }), 6);
+  const updatedPending = { ...pending };
+  assert.equal(decideStartup({ pending: updatedPending, remoteVersion: 6 }), 'conflict');
 });
