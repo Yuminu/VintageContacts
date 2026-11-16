@@ -1,6 +1,6 @@
 # 部署文档
 
-> 当前状态：已完成服务器信息和方案确认，尚未登录执行部署。实际公网访问地址、截图和最终版本在部署完成后补充，不提前填写。
+> 当前状态：已部署到腾讯云 Lighthouse 的 8080 端口，并从外部网络完成联系人、Excel、重启和备份验收。80 端口旧站未修改。
 
 ## 1. 目标服务器
 
@@ -104,20 +104,25 @@ sudo chown -R www-data:www-data /var/lib/vintagecontacts /var/backups/vintagecon
 
 ## 6. 部署应用
 
+服务器直连 GitHub 会超时，本次实际使用本地打包上传：
+
 ```sh
-git clone -b feature/backend-api https://github.com/Yuminu/VintageContacts.git /opt/vintagecontacts
+# 本地
+git archive --format=tar.gz -o vc-deploy.tar.gz HEAD
+scp -i ~/.ssh/vintagecontacts_lighthouse vc-deploy.tar.gz ubuntu@101.34.73.63:/tmp/vc-deploy.tar.gz
+
+# 服务器
+sudo mkdir -p /opt/vintagecontacts
+sudo tar -xzf /tmp/vc-deploy.tar.gz -C /opt/vintagecontacts
+sudo chown -R ubuntu:ubuntu /opt/vintagecontacts
 cd /opt/vintagecontacts
 PATH=/opt/node24/bin:$PATH /opt/node24/bin/npm ci --omit=dev
 ```
 
-合并 PR 后改为从 `main` 部署：
+如果服务器网络恢复，也可以从 GitHub 拉取：
 
 ```sh
-cd /opt/vintagecontacts
-git fetch origin
-git checkout main
-git pull --ff-only
-PATH=/opt/node24/bin:$PATH /opt/node24/bin/npm ci --omit=dev
+git clone -b main https://github.com/Yuminu/VintageContacts.git /opt/vintagecontacts
 ```
 
 ## 7. systemd 服务
@@ -208,18 +213,31 @@ sudo systemctl restart vintagecontacts
 
 ## 12. 实际部署记录
 
-部署完成后填写，不提前填写：
-
 | 项目 | 内容 |
 |---|---|
-| 部署日期 | 待填写 |
-| 公网访问地址 | 待填写（计划 `http://101.34.73.63:8080/`） |
-| 服务器地域 | 待填写 |
-| 操作系统 | Ubuntu 22.04 |
-| Node.js 版本 | 待填写（计划 24 LTS） |
-| Nginx 版本 | 待填写（服务器已有 1.18.0） |
-| 安全组端口 | 待填写（计划 8080） |
-| 验收截图位置 | 待填写 |
+| 部署日期 | 2026-11-17 |
+| 公网访问地址 | <http://101.34.73.63:8080/> |
+| 服务器地域 | ap-shanghai |
+| 实例 | Lighthouse `lh-1462607282-lhins-pnkyk09w` |
+| 操作系统 | Ubuntu 22.04.5 LTS（x86_64） |
+| Node.js 版本 | v24.22.3（独立安装到 `/opt/node24`） |
+| Nginx 版本 | 1.18.0 |
+| 安全组端口 | 22、80、8080；4173 只监听本机 |
+| 应用服务 | systemd `vintagecontacts`，enabled + active |
+| 数据库 | `/var/lib/vintagecontacts/contacts.sqlite`，owner `www-data` |
+| 备份 | `/var/backups/vintagecontacts/contacts-20261117-002120.sqlite` |
+| 旧站 80 | 保持正常，未修改 `/etc/nginx/sites-available/calculator` |
+| 验收截图 | `docs/images/cloud-home.png`、`cloud-directory.png`、`cloud-detail.png`、`cloud-excel.png` |
+
+部署结果：
+
+- `curl http://127.0.0.1:4173/healthz` 返回 `{"success":true,"data":{"status":"ok",...}}`。
+- 外部网络访问首页和 `/api/health` 正常。
+- 云端新建联系人（两个电话、收藏）刷新后可读回。
+- 云端 Excel 导入 1 位、导出 10 行，字段完整。
+- 重启 systemd 服务后联系人仍然存在。
+- 备份文件可被 SQLite 正常读取。
+- 80 端口旧站部署前后均返回 200。
 
 ## 13. 注意事项
 

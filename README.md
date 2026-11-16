@@ -1,4 +1,4 @@
-# VintageContacts · 纸间来电
+﻿# VintageContacts · 纸间来电
 
 按“复古红色转盘电话 + 纸质翻开记事簿”的设计实现的通讯录网站。前端使用原生 HTML / CSS / JavaScript，后端使用 Express 5 和 SQLite，联系人保存在服务器数据库中。
 
@@ -34,7 +34,7 @@ npm start
 示例：
 
 ```sh
-PORT=8080 DB_PATH=/var/lib/vintagecontacts/contacts.sqlite npm start
+PORT=4000 DB_PATH=/var/lib/vintagecontacts/contacts.sqlite npm start
 ```
 
 ## 架构
@@ -87,7 +87,7 @@ SQLite 使用三张表：
 
 - `contacts`：联系人主表，保存姓名、分组、短码、地址、备注、收藏、拨号/搜索次数和时间戳。
 - `contact_methods`：联系方式表，保存 `phone`、`email`、`social` 三类方法和社交平台标签。
-- `settings`：保存分组列表和初始化标记。
+- `settings`：保存分组列表、初始化标记和通讯录版本号。
 
 一个联系人对多条 `contact_methods`，删除联系人时关联记录级联删除。数据库字段使用 `snake_case`，API JSON 使用 `camelCase`。
 
@@ -180,7 +180,7 @@ GitHub Actions 在 push 和 Pull Request 时执行 `npm ci` 与 `npm test`。
 
 部署方案见 [docs/deployment.md](docs/deployment.md)。计划使用腾讯云 Lighthouse（Ubuntu 22.04）、Nginx、systemd 和 Node.js 24 LTS。
 
-云部署地址：待部署完成后填写。当前不能把本地 `localhost` 当作云部署完成。
+云部署地址：<http://101.34.73.63:8080/>（Ubuntu 22.04，Nginx 8080；80 端口旧站保留）。
 
 ## 代码规范
 
@@ -197,3 +197,4 @@ GitHub Actions 在 push 和 Pull Request 时执行 `npm ci` 与 `npm test`。
 ## 说明
 
 本项目是软件工程课程作业的应用实现。云部署、个人博客、演示视频和贡献比例在最终提交前按实际情况补充，不虚构测试结果或部署状态。
+
