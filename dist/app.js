@@ -1,3 +1,4 @@
+import {DIAL_DIGITS,digitAngle,closestStop,snapDial} from './dial.js';
 import {STORAGE_KEY,GROUPS_KEY,HEADERS,blankContact,demoContacts,normalizeContact,cleanPhone,unique,compareNames,initial,validateContact,toExcelRows,planImport,findDialTarget} from './data.js';
 
 const $=id=>document.getElementById(id);
@@ -6,7 +7,7 @@ let contacts=[],groups=['家人','朋友','大学同学','同事','老师'],stor
 try{const raw=localStorage.getItem(STORAGE_KEY);const parsed=raw===null?demoContacts():JSON.parse(raw);if(!Array.isArray(parsed))throw Error('通讯录存储格式异常');contacts=parsed.map(normalizeContact);const savedGroups=JSON.parse(localStorage.getItem(GROUPS_KEY)||'null');if(Array.isArray(savedGroups))groups=unique([...groups,...savedGroups]);}catch(error){storageAvailable=false;console.warn('通讯录暂时无法读取本地存储',error);}
 groups=unique([...groups,...contacts.map(c=>c.group)]);
 let currentView='directory',draft=null,query='',groupFilter='',saveTimer,toastTimer,dialTimer,numberTimer,ringTimer,number='',ringing=false,soundOn=false,audioContext;
-let rotation=0,dragging=false,lastAngle=0,dragStart=0,didDrag=false,selectedDigit=null,dialLocked=false;
+let rotation=0,dragging=false,lastAngle=0,didDrag=false,selectedDigit=null;
 const phoneArea=$('phoneArea'),overlay=$('bookOverlay'),dialog=$('utilityDialog');
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').hidden=false;toastTimer=setTimeout(()=>$('toast').hidden=true,3800);}
 function persist(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));storageAvailable=true;updateHome();return true;}catch{storageAvailable=false;$('saveStatus').textContent='保存失败：浏览器存储不可用，请先导出备份';toast('本地保存失败，请点击铅笔导出备份');return false;}}
@@ -45,7 +46,17 @@ let pendingImport=null;
 async function readExcel(file){if(!file)return;if(!window.XLSX){toast('Excel 组件未加载，请刷新重试');return;}if(file.size>5*1024*1024){toast('文件超过 5 MB，请分批导入');return;}try{const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:false});const ws=wb.Sheets[wb.SheetNames[0]];if(!ws)throw Error('未找到工作表');const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});if(!grid.length||!grid[0].some(v=>['姓名','name'].includes(String(v).trim())))throw Error('首行需包含「姓名」列，请下载模板核对');const range=XLSX.utils.decode_range(ws['!ref']||'A1');if(range.e.r>5000)throw Error('最多支持 5000 行，请分批导入');const rows=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});if(!rows.length)throw Error('文件中没有联系人');pendingImport=planImport(rows,contacts);const {added,merged,issues}=pendingImport;openDialog('先看看，要记下哪些人',`<div class="dialog-body">文件：${esc(file.name)}<br>本次导入将新增 <strong>${added}</strong> 位、合并 <strong>${merged}</strong> 条，跳过 <strong>${issues.length}</strong> 条。</div>${issues.length?`<div class="import-report">${issues.map(esc).join('<br>')}</div>`:'<p class="small-note">✓ 每一行都检查过了。</p>'}<div class="dialog-actions"><button class="primary-button" data-action="confirm-import" ${added+merged===0?'disabled':''}>确认导入</button><button class="secondary-button" data-action="cancel-import">取消</button></div>`);}catch(error){toast(`无法导入：${error.message}`);}finally{$('excelFile').value='';}}
 
 
-let cordFrame,manualEntry=false;
+let cordFrame,manualEntry=false,phoneSession=false,idleTimer=null;
+let rawRotation=0,digitRecorded=false;
+function syncIdleTimer(restart=false){
+  const waiting=overlay.hidden&&!ringing&&(phoneSession||number!==''||manualEntry||selectedDigit!==null||dragging);
+  if(!waiting||restart){clearTimeout(idleTimer);idleTimer=null;}
+  if(!waiting||idleTimer!==null)return;
+  idleTimer=setTimeout(()=>{
+    idleTimer=null;
+    if(overlay.hidden&&!ringing){$('phoneInput').blur();resetPhone();}
+  },4000);
+}
 function animateCord(){
   cancelAnimationFrame(cordFrame);
   const until=performance.now()+1450;
@@ -59,77 +70,116 @@ function animateCord(){
 }
 
 function showNumber(){
-  const active=overlay.hidden&&!ringing&&(manualEntry||(dragging&&selectedDigit!==null));
+  const active=overlay.hidden&&!ringing&&(phoneSession||manualEntry);
   const changed=phoneArea.classList.contains('active')!==active;
   phoneArea.classList.toggle('active',active);$('numberBubble').hidden=!active;
   if(changed)animateCord();
+  syncIdleTimer();
 }
-function cancelPhoneTimers(){clearTimeout(dialTimer);clearTimeout(numberTimer);clearTimeout(ringTimer);}
-function updateNumber(value){clearTimeout(numberTimer);clearTimeout(ringTimer);ringing=false;phoneArea.classList.remove('ringing');number=value.replace(/\D/g,'').slice(0,11);$('phoneInput').value=number;showNumber();const shortMatch=number.length===3?findDialTarget(contacts,number):null;
+function cancelPhoneTimers(){clearTimeout(dialTimer);clearTimeout(numberTimer);clearTimeout(ringTimer);clearTimeout(idleTimer);idleTimer=null;}
+function updateNumber(value,userActivity=true){clearTimeout(numberTimer);clearTimeout(ringTimer);ringing=false;phoneArea.classList.remove('ringing');number=value.replace(/\D/g,'').slice(0,11);$('phoneInput').value=number;showNumber();const shortMatch=number.length===3?findDialTarget(contacts,number):null;
   $('numberHint').textContent=shortMatch?'短码已找到，2 秒后翻开联系人':number.length===11?'2 秒后，替你翻开这一页…':number.length===3?'短码未设置，可继续输入完整号码':`已记下 ${number.length} / 11 位`;
   if(number.length===11||shortMatch)numberTimer=setTimeout(startRing,2000);
+  if(userActivity)syncIdleTimer(true);
 }
-function editNumber(value){clearTimeout(dialTimer);rotation=0;selectedDigit=null;dialLocked=false;renderDial();updateNumber(value);}
-function resetPhone(){manualEntry=false;cancelPhoneTimers();number='';$('phoneInput').value='';$('numberBubble').hidden=true;phoneArea.classList.remove('active','ringing');animateCord();ringing=false;dialLocked=false;dragging=false;rotation=0;selectedDigit=null;renderDial();}
-function startRing(){if(!overlay.hidden||(number.length!==11&&!(number.length===3&&findDialTarget(contacts,number))))return;ringing=true;$('numberBubble').hidden=true;phoneArea.classList.add('ringing');animateCord();beep(880,.2);setTimeout(()=>{if(ringing)beep(740,.2);},350);ringTimer=setTimeout(()=>{const target=findDialTarget(contacts,number);const phone=number;phoneArea.classList.remove('ringing');ringing=false;if(target){recordAccess(target.id,'dial');openBook();openContact(target.id);}else{openBook('new',phone);toast('这是个新号码，为这位朋友写一页吧');}},1000);}
-const digits=['1','2','3','4','5','6','7','8','9','0'];
-function renderDial(){const holeRadius=39;$('dialDigits').style.transform=`rotate(${rotation}deg)`;$('dialDigits').innerHTML=digits.map((digit,i)=>{const angle=(-36-i*32)*Math.PI/180;return `<button class="digit-hole ${selectedDigit===digit?'chosen':''}" data-digit="${digit}" aria-label="拨数字 ${digit}" style="left:${50+Math.cos(angle)*holeRadius-9.4}%;top:${50+Math.sin(angle)*holeRadius-9.4}%"><span style="transform:rotate(${-rotation}deg)">${digit}</span></button>`;}).join('');$('dialPreview').textContent=selectedDigit??'拨';$('dialPreview').classList.toggle('numeric',selectedDigit!==null);$('dialCaption').textContent=selectedDigit?'停留 1 秒，记下数字':'转动 · 停留 · 记下';}
-function nearestDigit(){const pointer=35;let min=360,best=null;digits.forEach((d,i)=>{const angle=-36-i*32+rotation;const delta=Math.abs(((angle-pointer)%360+540)%360-180);if(delta<min){min=delta;best=d;}});return min<=14?best:null;}
-function commitDigit(digit){if(number.length>=11){dialLocked=false;rotation=0;selectedDigit=null;renderDial();return;}updateNumber(number+digit);beep(460+Number(digit)*35);$('dialCaption').textContent='记下了';dialLocked=true;clearTimeout(dialTimer);dialTimer=setTimeout(()=>{rotation=0;selectedDigit=null;dialLocked=false;renderDial();showNumber();},230);}
-function armDigit(digit){clearTimeout(dialTimer);selectedDigit=digit;renderDial();showNumber();if(digit)dialTimer=setTimeout(()=>{if(selectedDigit===digit)commitDigit(digit);},1000);}
+function editNumber(value){clearTimeout(dialTimer);digitRecorded=true;renderDial();updateNumber(value);}
+function resetPhone(){manualEntry=false;phoneSession=false;rawRotation=0;digitRecorded=false;cancelPhoneTimers();number='';$('phoneInput').value='';$('numberHint').textContent='也可以直接在这里输入';$('numberBubble').hidden=true;phoneArea.classList.remove('active','ringing');animateCord();ringing=false;dragging=false;rotation=0;selectedDigit=null;renderDial();}
+function startRing(){if(!overlay.hidden||(number.length!==11&&!(number.length===3&&findDialTarget(contacts,number))))return;ringing=true;syncIdleTimer();$('numberBubble').hidden=true;phoneArea.classList.add('ringing');animateCord();beep(880,.2);setTimeout(()=>{if(ringing)beep(740,.2);},350);ringTimer=setTimeout(()=>{const target=findDialTarget(contacts,number);const phone=number;phoneArea.classList.remove('ringing');ringing=false;if(target){recordAccess(target.id,'dial');openBook();openContact(target.id);}else{openBook('new',phone);toast('这是个新号码，为这位朋友写一页吧');}},1000);}
+const digits=DIAL_DIGITS;
+function renderDial(){
+  const holes=$('dialDigits');
+  if(!holes.children.length){
+    holes.innerHTML=digits.map((digit,i)=>{
+      const angle=digitAngle(i)*Math.PI/180;
+      return `<button class="digit-hole" data-digit="${digit}" aria-label="拨数字 ${digit}" style="left:${50+Math.cos(angle)*39-9.4}%;top:${50+Math.sin(angle)*39-9.4}%"><span>${digit}</span></button>`;
+    }).join('');
+  }
+  holes.style.transform=`rotate(${rotation}deg)`;
+  for(const hole of holes.children){
+    hole.classList.toggle('chosen',hole.dataset.digit===selectedDigit);
+    hole.setAttribute('aria-pressed',String(hole.dataset.digit===selectedDigit));
+    hole.firstElementChild.style.transform=`rotate(${-rotation}deg)`;
+  }
+  $('dialPreview').textContent=selectedDigit??'拨';
+  $('dialPreview').classList.toggle('numeric',selectedDigit!==null);
+  $('dialCaption').textContent=selectedDigit?(digitRecorded?'已记下，再转一格':'停留 1 秒，记下数字'):'转动 · 停留 · 记下';
+  syncIdleTimer();
+}
+function commitDigit(digit){
+  if(digit!==selectedDigit||digitRecorded||number.length>=11)return;
+  digitRecorded=true;updateNumber(number+digit,false);renderDial();beep(460+Number(digit)*35);
+}
+function armDigit(digit,force=false){
+  if(digit===selectedDigit&&!force)return;
+  clearTimeout(dialTimer);selectedDigit=digit;digitRecorded=false;
+  renderDial();showNumber();
+  dialTimer=setTimeout(()=>commitDigit(digit),1000);
+}
 function dialAngle(event){const rect=$('rotary').getBoundingClientRect();return Math.atan2(event.clientY-(rect.top+rect.height/2),event.clientX-(rect.left+rect.width/2))*180/Math.PI;}
 $('rotary').addEventListener('pointerdown',event=>{
-  if(dialLocked||ringing||number.length>=11)return;
-  if(event.target.closest('.dial-center'))return;
-  manualEntry=false;$('phoneInput').blur();clearTimeout(dialTimer);
-  dragging=true;didDrag=false;selectedDigit=null;dragStart=lastAngle=dialAngle(event);
-  $('rotary').setPointerCapture(event.pointerId);showNumber();
+  if(ringing||number.length>=11)return;
+  manualEntry=false;phoneSession=true;$('phoneInput').blur();clearTimeout(dialTimer);
+  dragging=true;didDrag=false;rawRotation=rotation;lastAngle=dialAngle(event);
+  $('rotary').setPointerCapture(event.pointerId);showNumber();syncIdleTimer(true);
 });
 $('rotary').addEventListener('pointermove',event=>{
-  if(!dragging||dialLocked)return;
+  if(!dragging||ringing)return;
   const angle=dialAngle(event);let delta=angle-lastAngle;
   if(delta>180)delta-=360;if(delta< -180)delta+=360;lastAngle=angle;
   const rect=$('rotary').getBoundingClientRect();
   const radius=Math.hypot(event.clientX-rect.left-rect.width/2,event.clientY-rect.top-rect.height/2)/rect.width;
-  if(radius<.28||radius>.51){armDigit(null);return;}
-  if(Math.abs(angle-dragStart)>3)didDrag=true;if(!didDrag)return;
-  rotation+=delta;const digit=nearestDigit();
-  if(digit!==selectedDigit)armDigit(digit);
-  else{renderDial();if(Math.abs(delta)>.25)armDigit(digit);}
+  if(radius<.28||radius>.56)return;
+  if(Math.abs(delta)>.2)syncIdleTimer(true);
+  rawRotation+=delta;
+  const firstMove=!didDrag;
+  if(Math.abs(rawRotation-rotation)>3)didDrag=true;
+  if(!didDrag)return;
+  const snapped=snapDial(rawRotation,selectedDigit),changed=snapped.digit!==selectedDigit;
+  rotation=snapped.rotation;
+  if(changed){beep(250,.025);armDigit(snapped.digit);}
+  else if(firstMove)armDigit(snapped.digit,true);
 });
 $('rotary').addEventListener('pointerup',event=>{
   if(!dragging)return;dragging=false;
   if($('rotary').hasPointerCapture(event.pointerId))$('rotary').releasePointerCapture(event.pointerId);
-  if(didDrag){
-    if(!dialLocked){clearTimeout(dialTimer);rotation=0;selectedDigit=null;renderDial();}
-  }else{
+  if(!didDrag){
     const hole=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-digit]');
     if(hole)selectDialDigit(hole.dataset.digit);
   }
-  showNumber();
+  showNumber();syncIdleTimer(true);
 });
 $('rotary').addEventListener('pointercancel',()=>{
-  dragging=false;clearTimeout(dialTimer);selectedDigit=null;rotation=0;dialLocked=false;renderDial();showNumber();
+  clearTimeout(dialTimer);dragging=false;showNumber();syncIdleTimer(true);
 });
-function selectDialDigit(digit){if(dialLocked||ringing||number.length>=11)return;showNumber();const i=digits.indexOf(digit);rotation=35-(-36-i*32);armDigit(digit);}
-$('rotary').addEventListener('click',event=>{if(event.detail===0){const digit=event.target.closest('[data-digit]')?.dataset.digit;if(digit)selectDialDigit(digit);}});
-$('liftHandset').onclick=()=>{if(!ringing){manualEntry=true;showNumber();$('phoneInput').focus();}};
-$('numberBubble').addEventListener('focusin',()=>{manualEntry=true;showNumber();});
+function selectDialDigit(digit){
+  if(ringing||number.length>=11)return;
+  phoneSession=true;rotation=closestStop(rotation,digit);rawRotation=rotation;
+  armDigit(digit,true);showNumber();syncIdleTimer(true);beep(250,.025);
+}
+$('rotary').addEventListener('click',event=>{
+  if(event.detail===0){const digit=event.target.closest('[data-digit]')?.dataset.digit;if(digit)selectDialDigit(digit);}
+});
+$('liftHandset').onclick=()=>{if(!ringing){manualEntry=true;phoneSession=true;showNumber();syncIdleTimer(true);$('phoneInput').focus();}};
+$('numberBubble').addEventListener('focusin',()=>{manualEntry=true;phoneSession=true;showNumber();});
 $('numberBubble').addEventListener('focusout',event=>{
   if(event.relatedTarget&&$('numberBubble').contains(event.relatedTarget))return;
   setTimeout(()=>{if(!$('numberBubble').contains(document.activeElement)){manualEntry=false;showNumber();}},0);
 });
 document.addEventListener('pointerdown',event=>{
-  if(manualEntry&&!$('numberBubble').contains(event.target)&&!event.target.closest('#liftHandset')){
-    manualEntry=false;showNumber();
-  }
+  if(!overlay.hidden||dialog.open||(!phoneSession&&!manualEntry&&!ringing))return;
+  if(event.target.closest('#rotary,#numberBubble,#liftHandset'))return;
+  clearTimeout(dialTimer);clearTimeout(numberTimer);clearTimeout(ringTimer);
+  manualEntry=false;phoneSession=false;dragging=false;ringing=false;
+  phoneArea.classList.remove('ringing');$('phoneInput').blur();showNumber();
 });
-$('phoneInput').addEventListener('input',e=>{clearTimeout(dialTimer);rotation=0;selectedDigit=null;dialLocked=false;renderDial();updateNumber(e.target.value);});$('backspace').onclick=()=>editNumber(number.slice(0,-1));$('clearNumber').onclick=()=>{editNumber('');$('phoneInput').focus();};
+$('phoneInput').addEventListener('input',event=>editNumber(event.target.value));
+$('backspace').onclick=()=>{editNumber(number.slice(0,-1));$('phoneInput').focus();};
+$('clearNumber').onclick=()=>{editNumber('');$('phoneInput').focus();};
 document.addEventListener('keydown',event=>{
   if(!overlay.hidden||dialog.open||ringing||event.ctrlKey||event.metaKey||event.altKey)return;
   if(event.target.closest('input,textarea,select,[contenteditable="true"]'))return;
   if(/^\d$/.test(event.key)){
-    event.preventDefault();manualEntry=true;editNumber(number+event.key);$('phoneInput').focus();
+    event.preventDefault();manualEntry=true;phoneSession=true;editNumber(number+event.key);$('phoneInput').focus();
   }
 });
 $('soundButton').onclick=()=>{soundOn=!soundOn;$('soundButton').classList.toggle('sound-on',soundOn);$('soundButton').setAttribute('aria-label',soundOn?'关闭音效':'开启音效');$('soundButton').title=soundOn?'关闭音效':'开启音效';beep();toast(soundOn?'拨号音效已开启':'拨号音效已关闭');};

@@ -110,3 +110,10 @@ dialog{border:1px solid #c6b798;border-radius:5px;background:#fbf7eb;color:var(-
 .speed-code{font-family:Consolas,"Courier New",monospace;font-size:18px;line-height:26px;letter-spacing:1px;color:#a34435;border:1px solid #cfb89a;border-radius:3px;padding:0 7px;background:#f3e8d4}
 .number-row input::placeholder{font-size:14px;letter-spacing:.3px}
 @media(max-width:700px){.speed-code{font-size:17px}.number-row input::placeholder{font-size:11px}}
+
+.mini-ribbon{right:4%;top:-11px;width:14px;height:32px;transform:none}
+
+/* 机械旋钮逐格吸附，数字标签随盘面反向补偿，保持正立。 */
+.dial-digits,.digit-hole>span{transition:transform 90ms cubic-bezier(.2,.85,.25,1)}
+.digit-hole.chosen{border-color:#c3a568;box-shadow:inset 1px 3px 5px #191f1b8f,0 0 0 2px #e0c68d55}
+@media(prefers-reduced-motion:reduce){.dial-digits,.digit-hole>span{transition:none}}
