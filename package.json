@@ -6,6 +6,6 @@
   "description": "复古转盘电话与纸质记事簿通讯录",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test tests/data.test.mjs"
+    "test": "node --test"
   }
 }
