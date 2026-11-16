@@ -2,19 +2,80 @@ import {STORAGE_KEY,GROUPS_KEY,HEADERS,blankContact,demoContacts,normalizeContac
 
 const $=id=>document.getElementById(id);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let contacts=[],groups=['家人','朋友','大学同学','同事','老师'],storageAvailable=true;
-try{const raw=localStorage.getItem(STORAGE_KEY);const parsed=raw===null?demoContacts():JSON.parse(raw);if(!Array.isArray(parsed))throw Error('通讯录存储格式异常');contacts=parsed.map(normalizeContact);const savedGroups=JSON.parse(localStorage.getItem(GROUPS_KEY)||'null');if(Array.isArray(savedGroups))groups=unique([...groups,...savedGroups]);}catch(error){storageAvailable=false;console.warn('通讯录暂时无法读取本地存储',error);}
-groups=unique([...groups,...contacts.map(c=>c.group)]);
+const DEFAULT_GROUPS=['家人','朋友','大学同学','同事','老师'];
+let contacts=[],groups=[...DEFAULT_GROUPS],storageAvailable=true,serverAvailable=false,syncing=false,syncQueued=false,syncTimer,initialized=false;
+function readLocalCache(){
+  try{
+    const raw=localStorage.getItem(STORAGE_KEY);
+    const parsed=raw===null?null:JSON.parse(raw);
+    if(Array.isArray(parsed))contacts=parsed.map(normalizeContact);
+    const savedGroups=JSON.parse(localStorage.getItem(GROUPS_KEY)||'null');
+    if(Array.isArray(savedGroups))groups=unique([...groups,...savedGroups]);
+    storageAvailable=true;
+  }catch(error){storageAvailable=false;console.warn('通讯录暂时无法读取本地存储',error);}
+}
+async function loadFromServer(){
+  try{
+    const response=await fetch('/api/contacts',{headers:{Accept:'application/json'}});
+    if(!response.ok)throw Error(`HTTP ${response.status}`);
+    const payload=await response.json();
+    const data=payload?.data;
+    if(!data||!Array.isArray(data.contacts))throw Error('云端数据格式异常');
+    contacts=data.contacts.map(normalizeContact);
+    groups=unique(Array.isArray(data.groups)&&data.groups.length?data.groups:DEFAULT_GROUPS);
+    serverAvailable=true;
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));storageAvailable=true;}catch{}
+  }catch(error){serverAvailable=false;console.warn('无法连接云端通讯录，使用本地缓存',error);}
+}
+async function initializeContacts(){
+  readLocalCache();
+  await loadFromServer();
+  if(!serverAvailable&&!contacts.length)contacts=demoContacts().map(normalizeContact);
+  groups=unique([...groups,...contacts.map(c=>c.group)]);
+  initialized=true;
+  updateHome();renderDial();
+  if(!serverAvailable)setTimeout(()=>toast('云端暂时不可用，当前使用本地缓存'),700);
+  else if(!storageAvailable)setTimeout(()=>toast('浏览器存储不可用，修改会直接保存到云端'),800);
+}
+function scheduleServerSync(){
+  if(!initialized)return;
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(syncToServer,300);
+}
+async function syncToServer(){
+  syncTimer=null;
+  if(syncing){syncQueued=true;return;}
+  syncing=true;
+  try{
+    const response=await fetch('/api/contacts',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts,groups})});
+    if(!response.ok){let message=`HTTP ${response.status}`;try{const payload=await response.json();message=payload?.error?.message||message;}catch{}throw Error(message);}
+    serverAvailable=true;
+    if(currentView==='detail')setBookStatus('✓ 已保存到云端');
+  }catch(error){
+    serverAvailable=false;
+    if(currentView==='detail')setBookStatus('仅保存在本机，云端同步失败');
+    toast('云端同步失败，数据已保存在本机，请检查网络');
+  }finally{
+    syncing=false;
+    if(syncQueued){syncQueued=false;scheduleServerSync();}
+  }
+}
 let currentView='directory',draft=null,query='',groupFilter='',saveTimer,toastTimer,dialTimer,numberTimer,ringTimer,number='',ringing=false,soundOn=false,audioContext;
 let rotation=0,dragging=false,lastAngle=0,dragStart=0,didDrag=false,selectedDigit=null,dialLocked=false;
 const phoneArea=$('phoneArea'),overlay=$('bookOverlay'),dialog=$('utilityDialog');
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').hidden=false;toastTimer=setTimeout(()=>$('toast').hidden=true,3800);}
-function persist(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));storageAvailable=true;updateHome();return true;}catch{storageAvailable=false;$('saveStatus').textContent='保存失败：浏览器存储不可用，请先导出备份';toast('本地保存失败，请点击铅笔导出备份');return false;}}
+function persist(){
+  let localOk=true;
+  try{localStorage.setItem(STORAGE_KEY,JSON.stringify(contacts));localStorage.setItem(GROUPS_KEY,JSON.stringify(groups));storageAvailable=true;}
+  catch{storageAvailable=false;localOk=false;setBookStatus('本地存储不可用，正在保存到云端');toast('浏览器存储不可用，修改将直接保存到云端');}
+  scheduleServerSync();updateHome();
+  return localOk||serverAvailable;
+}
 function updateHome(){ $('contactCount').textContent=`${contacts.length} 位联系人`;$('miniNames').innerHTML='<span>一些名字<small>分组</small></span><span>一些名字<small>分组</small></span><span>一些名字<small>分组</small></span>'; }
 function beep(freq=700,duration=.08){if(!soundOn)return;try{audioContext??=new (window.AudioContext||window.webkitAudioContext)();audioContext.resume();const osc=audioContext.createOscillator(),gain=audioContext.createGain();osc.connect(gain);gain.connect(audioContext.destination);osc.frequency.value=freq;gain.gain.setValueAtTime(.025,audioContext.currentTime);gain.gain.exponentialRampToValueAtTime(.001,audioContext.currentTime+duration);osc.start();osc.stop(audioContext.currentTime+duration);}catch{}}
 function openDialog(title,body){$('dialogContent').innerHTML=`<h2 class="dialog-heading" id="dialogTitle">${title}<button data-action="close-dialog" aria-label="关闭窗口">×</button></h2>${body}`;if(!dialog.open)dialog.showModal();}
 function closeDialog(){dialog.close();}
-function showHelp(){openDialog('慢一点，也能好好联系',`<div class="dialog-body"><p><strong>01 / 拿起听筒</strong><br>点击听筒或转盘即可开始。拖动转盘，把数字转到右下方的指针处，停留 1 秒后录入；也可以轻点数字，或在气泡中直接输入。</p><p><strong>02 / 让电话替你翻页</strong><br>输入已设置的 3 位键盘短码，或号码满 11 位后，等待 2 秒，电话会响铃 1 秒，再打开已有联系人或新建页面。此处拨号用于查找联系人，不会拨打真实电话。短码可在联系人详情中设置；短号和国际号码可以在记事簿中录入。</p><p><strong>03 / 把值得记住的人写下</strong><br>点击小记事簿进入通讯录。详情页支持多个电话、邮箱、社交账号；点击右上书签标为特别关心。姓名有效时，修改自动保存，离开时再次检查。</p><p><strong>04 / 铅笔里藏着 Excel</strong><br>打开记事簿，点击右下角铅笔，可下载模板、导入或导出 Excel。</p><div class="dialog-rule"></div><p>联系人保存在<strong>当前浏览器本地</strong>，不会自动跨设备同步。清理浏览器数据会删除记录，请定期导出备份。初次打开有 8 位虚构示例联系人，号码仅作演示。</p></div><div class="dialog-actions"><button class="primary-button" data-action="close-dialog">我知道了</button><button class="secondary-button" data-action="clear-demo">移除示例联系人</button></div>`);}
+function showHelp(){openDialog('慢一点，也能好好联系',`<div class="dialog-body"><p><strong>01 / 拿起听筒</strong><br>点击听筒或转盘即可开始。拖动转盘，把数字转到右下方的指针处，停留 1 秒后录入；也可以轻点数字，或在气泡中直接输入。</p><p><strong>02 / 让电话替你翻页</strong><br>输入已设置的 3 位键盘短码，或号码满 11 位后，等待 2 秒，电话会响铃 1 秒，再打开已有联系人或新建页面。此处拨号用于查找联系人，不会拨打真实电话。短码可在联系人详情中设置；短号和国际号码可以在记事簿中录入。</p><p><strong>03 / 把值得记住的人写下</strong><br>点击小记事簿进入通讯录。详情页支持多个电话、邮箱、社交账号；点击右上书签标为特别关心。姓名有效时，修改自动保存，离开时再次检查。</p><p><strong>04 / 铅笔里藏着 Excel</strong><br>打开记事簿，点击右下角铅笔，可下载模板、导入或导出 Excel。</p><div class="dialog-rule"></div><p>联系人在保存时同步到<strong>云端的 SQLite 数据库</strong>，同时在本机保留一份缓存；刷新浏览器或换设备后重新打开即可读取。初次打开有 8 位虚构示例联系人，号码仅作演示。</p></div><div class="dialog-actions"><button class="primary-button" data-action="close-dialog">我知道了</button><button class="secondary-button" data-action="clear-demo">移除示例联系人</button></div>`);}
 function personRow(c,extra='',showCode=false){const tones=['','red','gold'];return `<button class="person-row" data-action="open-contact" data-id="${esc(c.id)}"><span class="avatar ${tones[c.name.charCodeAt(0)%3]}">${esc(c.name.slice(0,1))}</span><span><span class="person-name">${esc(c.name)}</span><span class="person-meta">${esc(c.phones[0]||c.emails[0]||c.group)}</span></span><span class="row-detail">${showCode&&c.speedCode?`<span class="speed-code" aria-label="键盘短码 ${esc(c.speedCode)}">${esc(c.speedCode)}</span>`:''}${extra|| (c.favorite?'☆':'↗')}</span></button>`;}
 function recordAccess(id,kind){const c=contacts.find(c=>c.id===id);if(!c)return;c[kind==='dial'?'dialCount':'searchCount']++;c.lastContactAt=Date.now();persist();}
 function openBook(view='directory',phone=''){
@@ -24,7 +85,7 @@ function openBook(view='directory',phone=''){
 }
 function closeBook(){if(currentView==='detail'&&!flushDraft(true))return;overlay.hidden=true;document.body.style.overflow='';resetPhone();$('openBook').focus();}
 function setBookStatus(text){$('saveStatus').textContent=text;}
-function renderDirectory(){currentView='directory';draft=null;$('bookBreadcrumb').textContent='通讯录 / 扉页';setBookStatus(storageAvailable?'':'本地存储不可用，请及时导出备份');const favorites=contacts.filter(c=>c.favorite).sort(compareNames);const recent=contacts.filter(c=>c.dialCount+c.searchCount>0).sort((a,b)=>(b.dialCount+b.searchCount)-(a.dialCount+a.searchCount)||b.lastContactAt-a.lastContactAt).slice(0,5);
+function renderDirectory(){currentView='directory';draft=null;$('bookBreadcrumb').textContent='通讯录 / 扉页';setBookStatus(serverAvailable?'云端已连接':(storageAvailable?'云端未连接，使用本地缓存':'本地存储不可用，请及时导出备份'));const favorites=contacts.filter(c=>c.favorite).sort(compareNames);const recent=contacts.filter(c=>c.dialCount+c.searchCount>0).sort((a,b)=>(b.dialCount+b.searchCount)-(a.dialCount+a.searchCount)||b.lastContactAt-a.lastContactAt).slice(0,5);
   $('leftPage').innerHTML=`<div class="page-eyebrow">ADDRESS BOOK</div><h2 class="page-heading" id="bookTitle">通讯录<span>✳</span></h2><h3 class="section-title">特别关心 <button class="plus" data-action="choose-favorites" aria-label="添加特别关心">+</button></h3><div class="favorite-list">${favorites.map(c=>personRow(c,'',true)).join('')||'<p class="paper-empty">把重要的人，夹在书签里。</p>'}</div><h3 class="section-title">最近联系的人 <small class="person-meta">常联系的前 5 位</small></h3><div class="recent-list">${recent.map(c=>personRow(c,`${c.dialCount+c.searchCount} 次`)).join('')||'<p class="paper-empty">拨个号码，或搜索一位朋友吧。</p>'}</div>`;
   $('rightPage').innerHTML=`<div class="page-eyebrow">A PLACE FOR EVERY NAME</div><h2 class="page-heading">所有联系人 <button class="small-icon" data-action="new-contact" aria-label="新增联系人">+</button></h2><div class="search-line"><span aria-hidden="true">⌕</span><input id="searchContacts" type="search" placeholder="寻找姓名、号码、邮箱或分组" aria-label="搜索联系人" value="${esc(query)}"></div><div class="directory-top"><span id="resultCount" class="person-meta"></span><button data-action="show-groups">分组索引 ↗</button></div><div id="directoryResults"></div>`;renderResults();}
 function matchesQuery(c,q){return [c.name,c.group,...c.phones,...c.emails,...c.socials.map(s=>s.value),c.address].some(s=>s.toLowerCase().includes(q));}
@@ -39,7 +100,7 @@ function flushDraft(leaving=false){clearTimeout(saveTimer);if(!draft)return true
 function editDraft(target){if(!draft)return;if(target.dataset.field)draft[target.dataset.field]=target.value;if(target.dataset.array)draft[target.dataset.array][+target.dataset.index]=target.value;if(target.dataset.social)draft.socials[+target.dataset.index][target.dataset.social]=target.value;clearTimeout(saveTimer);setBookStatus('正在记下…');saveTimer=setTimeout(()=>flushDraft(),450);}
 function showGroups(){currentView='groups';draft=null;$('bookBreadcrumb').textContent='通讯录 / 分组索引';$('rightPage').innerHTML=`<div class="page-eyebrow">EVERY CIRCLE HAS A STORY</div><h2 class="page-heading">分组索引 <button class="small-icon" data-action="new-group" aria-label="新建分组">+</button></h2><p class="page-subtitle">给不同阶段相识的人，留一页位置。</p>${groups.map(g=>`<div class="group-row"><button data-action="filter-group" data-group="${esc(g)}">${esc(g)}</button><small>${contacts.filter(c=>c.group===g).length} 人</small><button class="remove-group" data-action="delete-group" data-group="${esc(g)}" aria-label="删除分组 ${esc(g)}">×</button></div>`).join('')}<button class="back-button" style="margin-top:25px" data-action="back-directory">← 所有联系人</button>`;}
 function chooseFavorites(){openDialog('把重要的人夹在书签里',`<div class="choose-list">${contacts.slice().sort(compareNames).map(c=>`<label class="choose-row"><input type="checkbox" data-favorite-id="${esc(c.id)}" ${c.favorite?'checked':''}><span>${esc(c.name)}</span><small class="person-meta">${esc(c.group)}</small></label>`).join('')||'<p class="paper-empty">先写下一位联系人吧。</p>'}</div><div class="dialog-actions"><button class="primary-button" data-action="save-favorites">夹好书签</button></div>`);}
-function showExcel(){if(currentView==='detail'&&!flushDraft())toast('当前页面尚未保存，导出仅包含已保存的联系人');openDialog('铅笔里的 Excel',`<div class="dialog-body"><p><strong>导入格式</strong><br>使用 .xlsx / .xls 文件的第一个工作表，首行为列名，必需列为「姓名」，其余列可选：分组、键盘短码、电话号码、电子邮箱、社交媒体账号、通讯地址、备注、特别关心。</p><p>同一人的多个电话或邮箱以中文分号「；」分隔。社交账号支持「微信:账号；QQ:账号」，也兼容本站导出的 JSON 格式。电话号码建议设为文本，保留前导零。</p><p>导入前先预览；同号码合并，保留原有联系方式，其他非空字段更新。错误行跳过并列出原因。最多 5 MB / 5000 行。</p></div><div class="dialog-actions"><button class="primary-button" data-action="select-excel">选择 Excel 导入 ↗</button><button class="secondary-button" data-action="download-template">下载模板 ↓</button></div><div class="dialog-rule"></div><div class="dialog-body">一位联系人一行，保留所有联系方式和特别关心标记。</div><div class="dialog-actions"><button class="secondary-button" data-action="export-excel">导出全部 ${contacts.length} 位联系人 ↓</button></div><p class="small-note">数据仅存于本浏览器，建议定期导出。</p>`);}
+function showExcel(){if(currentView==='detail'&&!flushDraft())toast('当前页面尚未保存，导出仅包含已保存的联系人');openDialog('铅笔里的 Excel',`<div class="dialog-body"><p><strong>导入格式</strong><br>使用 .xlsx / .xls 文件的第一个工作表，首行为列名，必需列为「姓名」，其余列可选：分组、键盘短码、电话号码、电子邮箱、社交媒体账号、通讯地址、备注、特别关心。</p><p>同一人的多个电话或邮箱以中文分号「；」分隔。社交账号支持「微信:账号；QQ:账号」，也兼容本站导出的 JSON 格式。电话号码建议设为文本，保留前导零。</p><p>导入前先预览；同号码合并，保留原有联系方式，其他非空字段更新。错误行跳过并列出原因。最多 5 MB / 5000 行。</p></div><div class="dialog-actions"><button class="primary-button" data-action="select-excel">选择 Excel 导入 ↗</button><button class="secondary-button" data-action="download-template">下载模板 ↓</button></div><div class="dialog-rule"></div><div class="dialog-body">一位联系人一行，保留所有联系方式和特别关心标记。</div><div class="dialog-actions"><button class="secondary-button" data-action="export-excel">导出全部 ${contacts.length} 位联系人 ↓</button></div><p class="small-note">联系人在保存时同步到云端，仍建议定期导出备份。</p>`);}
 function downloadExcel(template=false){if(!window.XLSX){toast('Excel 组件未加载，请刷新后重试');return;}const rows=template?[{'姓名':'示例姓名','分组':'朋友','键盘短码':'001','电话号码':'13800000000；13900000000','电子邮箱':'hello@example.com','社交媒体账号':'微信:example；QQ:123456','通讯地址':'示例城市和街道','备注':'可删除这一行后填写自己的联系人','特别关心':'是'}]:toExcelRows(contacts);const ws=XLSX.utils.json_to_sheet(rows,{header:HEADERS});ws['!cols']=HEADERS.map(h=>({wch:({'姓名':16,'分组':14,'键盘短码':14,'社交媒体账号':48,'备注':40,'特别关心':12})[h]||32}));for(const key of Object.keys(ws)){if(!key.startsWith('!')&&ws[key].t==='s')ws[key].z='@';}const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'通讯录');XLSX.writeFile(wb,template?'纸间来电-导入模板.xlsx':`纸间来电-通讯录-${new Date().toISOString().slice(0,10)}.xlsx`);toast(template?'模板已下载，按列填写即可':'通讯录已导出，请好好保存');}
 let pendingImport=null;
 async function readExcel(file){if(!file)return;if(!window.XLSX){toast('Excel 组件未加载，请刷新重试');return;}if(file.size>5*1024*1024){toast('文件超过 5 MB，请分批导入');return;}try{const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:false});const ws=wb.Sheets[wb.SheetNames[0]];if(!ws)throw Error('未找到工作表');const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});if(!grid.length||!grid[0].some(v=>['姓名','name'].includes(String(v).trim())))throw Error('首行需包含「姓名」列，请下载模板核对');const range=XLSX.utils.decode_range(ws['!ref']||'A1');if(range.e.r>5000)throw Error('最多支持 5000 行，请分批导入');const rows=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});if(!rows.length)throw Error('文件中没有联系人');pendingImport=planImport(rows,contacts);const {added,merged,issues}=pendingImport;openDialog('先看看，要记下哪些人',`<div class="dialog-body">文件：${esc(file.name)}<br>本次导入将新增 <strong>${added}</strong> 位、合并 <strong>${merged}</strong> 条，跳过 <strong>${issues.length}</strong> 条。</div>${issues.length?`<div class="import-report">${issues.map(esc).join('<br>')}</div>`:'<p class="small-note">✓ 每一行都检查过了。</p>'}<div class="dialog-actions"><button class="primary-button" data-action="confirm-import" ${added+merged===0?'disabled':''}>确认导入</button><button class="secondary-button" data-action="cancel-import">取消</button></div>`);}catch(error){toast(`无法导入：${error.message}`);}finally{$('excelFile').value='';}}
@@ -175,4 +236,6 @@ document.addEventListener('click',event=>{const target=event.target.closest('[da
 }});
 document.addEventListener('keydown',event=>{if(event.key!=='Tab'||overlay.hidden||dialog.open)return;const focusables=[...overlay.querySelectorAll('button,input,select,textarea')].filter(el=>!el.disabled&&el.getClientRects().length);const first=focusables[0],last=focusables.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}});
 window.addEventListener('beforeunload',event=>{if(draft&&!flushDraft()){event.preventDefault();event.returnValue='';}});
-updateHome();renderDial();if(!storageAvailable)setTimeout(()=>toast('浏览器存储不可用，请检查设置或通过 Excel 备份'),800);
+renderDial();initializeContacts();
+window.addEventListener('online',()=>{if(initialized)scheduleServerSync();});
+window.addEventListener('beforeunload',()=>{if(!initialized||!syncTimer)return;clearTimeout(syncTimer);try{void fetch('/api/contacts',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts,groups}),keepalive:true});}catch{}});
