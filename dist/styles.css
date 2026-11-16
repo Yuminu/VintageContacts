@@ -12,3 +12,80 @@ dialog{border:1px solid #c6b798;border-radius:5px;background:#fbf7eb;color:var(-
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 
 @media(max-width:700px){.phone-area{height:auto}.favorite-ribbon{height:104px}}
+
+/* 纸间来电：可读性、转盘与纸页布局修订 */
+#miniNames{display:block;filter:blur(3px);opacity:.6;user-select:none;pointer-events:none}
+.book-open-hint{font-size:19px;bottom:-46px;letter-spacing:1.5px}
+.phone-instruction{font-size:23px;letter-spacing:3px;bottom:4.5%;right:13%}
+.digit-hole,.dial-center>.numeric{font-family:Consolas,"Courier New",monospace;font-variant-numeric:lining-nums tabular-nums slashed-zero;font-feature-settings:"lnum" 1,"tnum" 1,"zero" 1}
+.digit-hole{line-height:1;font-size:clamp(21px,2.4vw,32px)}
+.digit-hole>span{display:grid;place-items:center;width:100%;height:100%;line-height:1}
+.number-bubble{top:15%;left:34%;width:280px;padding:10px 17px 9px;transform:none;border-radius:24px 24px 24px 6px;box-shadow:2px 5px 12px #57462a18;animation:speechIn .25s ease}
+.number-bubble:after{left:-13px;bottom:6px;width:18px;height:18px;transform:none;clip-path:polygon(100% 0,100% 100%,0 100%);border:0;border-bottom:1px solid #d3c7b2;background:#fcf8ee}
+.bubble-label{font-size:11px;letter-spacing:1px}.number-row{margin:5px 0 4px;align-items:center}
+.number-row input{font-family:Consolas,"Courier New",monospace;font-size:25px;line-height:29px;letter-spacing:1.2px;font-variant-numeric:lining-nums tabular-nums slashed-zero}
+.bubble-bottom,.bubble-bottom button{font-size:10px}
+.book-shell{height:min(780px,94dvh)}
+.book-top{font-size:15px;min-height:46px;flex-shrink:0;letter-spacing:.5px;gap:18px}
+.book-top button{font-size:16px;padding:9px 2px;white-space:nowrap}
+#saveStatus{font-size:13px}
+.large-book{grid-template-rows:minmax(0,1fr);padding:14px 16px;align-items:stretch}
+.book-bottom-shadow{position:absolute;pointer-events:none}
+.book-page{height:100%;padding-bottom:34px}
+.book-tools{min-height:68px;flex-shrink:0}
+.pencil-button{font-size:15px;gap:20px;min-height:54px}
+.pencil-shape{width:180px;height:17px}
+.page-eyebrow{font-size:12px;letter-spacing:2.2px}
+.page-heading{font-size:32px}.section-title{font-size:22px}
+.person-name{font-size:20px}.person-meta{font-size:13px}.row-detail{font-size:13px}
+.directory-list .person-name{font-size:20px}.directory-list .person-meta{font-size:13px}
+.person-row{padding:12px 0}.directory-list .person-row{padding:11px 0}
+.directory-top button{font-size:16px}.search-line input{font-size:18px;line-height:26px}
+.letter-heading{font-size:23px;line-height:30px;letter-spacing:2px;margin:25px 0 9px;padding:0 0 9px}
+.contact-scroll{padding-right:32px}.alphabet{width:23px;margin-right:-33px;gap:8px;padding:3px 0}
+.alphabet button{font-size:16px;line-height:20px;padding:2px 0}
+.back-button{font-size:19px;line-height:28px;padding-bottom:20px;letter-spacing:1px}
+.left-page:has(.notes-textarea){display:flex;flex-direction:column}
+.notes-textarea{flex:1;height:auto;min-height:200px;font-size:21px;line-height:36px;background:repeating-linear-gradient(transparent 0,transparent 35px,#d8cfb94d 36px)}
+.detail-title{font-size:32px;margin:22px 0 20px}
+.field{margin-bottom:13px}.field>label,.field-header{font-size:17px;line-height:23px;margin-bottom:3px}
+.field input,.field select,.field textarea{font-size:22px;line-height:28px;padding:5px 2px}
+.repeat-row{gap:8px;min-height:40px}.repeat-row select{font-size:17px;width:96px;flex-basis:96px}
+.field-header{padding-right:0;min-height:28px}.field-header button,.repeat-row .remove-field{flex:0 0 32px;width:32px;height:30px;font:25px/30px Georgia,serif;text-align:center;padding:0;display:grid;place-items:center}
+.field-header button{margin-left:auto}
+.detail-actions{font-size:16px;line-height:26px;gap:12px;margin-top:20px}
+.detail-actions button{font-size:17px}.error-text{font-size:14px;line-height:1.7}
+.page-subtitle,.small-note,.paper-empty{font-size:16px}
+.dialog-heading{font-size:29px}.dialog-body,.import-report{font-size:16px;line-height:1.85}
+.primary-button,.secondary-button{font-size:15px;line-height:22px}
+.group-row>button:first-child{font-size:23px}.group-row small{font-size:15px}
+@keyframes speechIn{from{opacity:0;transform:translateY(5px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:1050px) and (min-width:701px){.number-bubble{width:265px;left:29%;top:15%}.book-page{padding:25px 25px 34px}.book-top{font-size:13px;gap:10px}.book-top button{font-size:15px}#saveStatus{font-size:12px}}
+@media(max-width:700px){
+  .book-open-hint{font-size:17px;bottom:-40px;left:0;letter-spacing:0}
+  .phone-instruction{font-size:19px;right:8%;bottom:4%;letter-spacing:2px}
+  .digit-hole{font-size:23px}.number-bubble{width:49%;left:29%;top:14%;padding:6px 10px 7px;border-radius:19px 19px 19px 5px}
+  .bubble-label{font-size:8px;letter-spacing:.5px}.number-row{margin:2px 0}.number-row input{font-size:20px;line-height:23px;letter-spacing:0}
+  .number-row input::placeholder{font-size:12px}.number-row button{font-size:16px}.bubble-bottom,.bubble-bottom button{font-size:8px}
+  .book-shell{height:calc(100dvh - 16px)}.book-top{display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto;gap:2px 8px;min-height:64px;padding:5px}
+  #bookBreadcrumb{font-size:13px}#saveStatus{font-size:11px;margin:0;grid-row:2;grid-column:1}
+  .book-top button{grid-row:1/3;grid-column:2;font-size:15px;align-self:center}
+  .large-book{padding:10px 11px;display:block}.book-page{height:auto;padding:25px 22px 35px}
+  .left-page:has(.notes-textarea){min-height:355px}.notes-textarea{min-height:230px}
+  .book-tools{min-height:57px}.pencil-button{font-size:12px;gap:12px}.pencil-shape{width:145px;height:15px}
+  .page-eyebrow{font-size:10px}.page-heading{font-size:29px}.section-title{font-size:22px}
+  .favorite-list,.recent-list{grid-template-columns:1fr}.favorite-list .person-name,.recent-list .person-name{font-size:20px}
+  .recent-list .row-detail{font-size:13px}.person-meta{font-size:12px}
+  .field>label,.field-header{font-size:17px}.field input,.field select,.field textarea{font-size:21px}
+  .repeat-row select{font-size:17px;width:85px;flex-basis:85px}.detail-actions{font-size:15px}
+}
+.phone-area.active .handset{transform:translateY(-56px) rotate(-1deg)}
+.number-row input:focus-visible{outline:none}.number-bubble:focus-within{border-color:#ac9772}
+.back-button{text-align:left}
+.book-shell{height:min(820px,calc(100dvh - 70px))}
+.detail-title{margin:16px 0}.field{margin-bottom:8px}
+.field input,.field select,.field textarea{line-height:26px;padding-top:4px;padding-bottom:4px}
+.detail-actions{margin-top:12px}
+@keyframes ring{from{transform:translateY(-53px) rotate(-1deg)}to{transform:translateY(-58px) rotate(1deg)}}
+@media(max-width:1050px) and (min-width:701px){.book-shell{height:calc(100dvh - 36px)}}
+@media(max-width:700px){.book-shell{height:calc(100dvh - 16px)}}

@@ -22,17 +22,17 @@
   <nav aria-label="主导航"><button id="openBookTop">翻开通讯录 <span>↗</span></button><button id="helpButton" class="round-button" aria-label="使用说明">?</button><button id="soundButton" class="round-button" aria-label="开启音效" title="开启音效">♫<span class="sound-dot"></span></button></nav>
 </header>
 <main class="scene" id="scene">
-  <section class="intro"><div class="eyebrow"><span></span> A LITTLE CLOSER, EVERY DAY</div><h1>通讯录<span class="title-dot">。</span></h1><p>有些联系，值得慢慢拨。</p><span class="intro-note">一本记事簿，一通熟悉的来电。</span></section>
+  <section class="intro"><div class="eyebrow"><span></span> A LITTLE CLOSER, EVERY DAY</div><h1>通讯录</h1></section>
   <div class="desk" aria-hidden="true"><span></span></div>
   <button class="mini-book" id="openBook" aria-label="翻开通讯录记事簿">
-    <span class="mini-cover"></span><span class="mini-page mini-left"><span class="mini-date">一些值得记住的人</span><span class="mini-line">特别关心 <i>☆</i></span><span class="mini-scribble">把想念，写下来。</span><span class="mini-lines"></span></span><span class="mini-page mini-right"><span class="mini-title">通讯录</span><span id="miniNames"></span><span class="mini-page-number">01</span></span><span class="mini-ribbon"></span><span class="book-open-hint">轻点，翻开记事簿 ↗</span>
+    <span class="mini-cover"></span><span class="mini-page mini-left"><span class="mini-date">一些值得记住的人</span><span class="mini-line">特别关心 <i>☆</i></span><span class="mini-scribble">把想念，写下来。</span><span class="mini-lines"></span></span><span class="mini-page mini-right"><span class="mini-title">通讯录</span><span id="miniNames" aria-hidden="true"></span><span class="mini-page-number">01</span></span><span class="mini-ribbon"></span><span class="book-open-hint">轻点，翻开记事簿 ↗</span>
   </button>
   <div class="phone-area" id="phoneArea">
     <div class="number-bubble" id="numberBubble" hidden><span class="bubble-label">写下号码，或慢慢拨</span><div class="number-row"><input id="phoneInput" type="tel" inputmode="numeric" maxlength="11" placeholder="输入 11 位号码" aria-label="电话号码"><button id="backspace" aria-label="删除末位数字">⌫</button></div><div class="bubble-bottom"><span id="numberHint">也可以直接在这里输入</span><button id="clearNumber">清空</button></div></div>
     <div class="ring-marks" id="ringMarks" aria-hidden="true"><span>♪</span><span>♬</span><span>♫</span></div>
     <svg class="phone-illustration" viewBox="0 0 760 660" role="img" aria-label="一部红色的老式转盘电话">
       <ellipse cx="407" cy="594" rx="282" ry="30" fill="#59483a" opacity=".13"/>
-      <path d="M180 220 C75 218 152 331 89 349 C48 363 116 390 85 407 C44 430 115 445 83 464 C46 487 123 501 93 520 C60 543 122 556 136 553" fill="none" stroke="#323831" stroke-width="14" stroke-linecap="round"/>
+      <path id="handsetCord" d="M148 145 C80 145 94 255 112 290 C65 310 126 328 94 345 C55 365 122 386 91 405 C55 426 124 446 94 466 C58 488 118 513 136 553" fill="none" stroke="#323831" stroke-width="14" stroke-linecap="round"/>
       <path d="M665 420 C745 411 705 547 755 550" fill="none" stroke="#393c32" stroke-width="9"/>
       <path d="M181 229 Q184 203 217 203 L582 203 Q613 203 618 233 L672 546 Q678 583 637 586 L157 586 Q116 583 123 549Z" fill="#792b26"/>
       <path d="M179 218 Q183 192 216 192 L580 192 Q608 192 613 222 L664 529 Q671 565 632 568 L161 568 Q125 568 131 532Z" fill="url(#phoneRed)"/>
@@ -46,7 +46,7 @@
     <div class="rotary" id="rotary" role="group" aria-label="电话转盘，拖动旋转或点击数字"><div class="dial-digits" id="dialDigits"></div><div class="dial-center"><span>PAPER & RING</span><strong id="dialPreview">拨</strong><small id="dialCaption">转动 · 停留 · 记下</small></div><span class="dial-pointer" aria-hidden="true"></span></div>
     <button id="liftHandset" class="lift-hit" aria-label="拿起听筒，输入号码"></button>
   </div>
-  <div class="phone-instruction"><span class="curved-arrow">↶</span><div>转一转，找个想念的人<small>拖动转盘 · 数字停留 1 秒即输入</small></div></div>
+  <div class="phone-instruction">拖动转盘</div>
   <span class="desk-caption">GOOD CONNECTIONS NEVER GET OLD.</span>
 </main>
 <footer class="footer"><span><i></i> <span id="contactCount">0 位联系人</span>，好好记着。</span><span>写在纸上，也放在心上 <span class="footer-star">✳</span></span></footer>
