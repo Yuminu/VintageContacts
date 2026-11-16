@@ -89,3 +89,24 @@ dialog{border:1px solid #c6b798;border-radius:5px;background:#fbf7eb;color:var(-
 @keyframes ring{from{transform:translateY(-53px) rotate(-1deg)}to{transform:translateY(-58px) rotate(1deg)}}
 @media(max-width:1050px) and (min-width:701px){.book-shell{height:calc(100dvh - 36px)}}
 @media(max-width:700px){.book-shell{height:calc(100dvh - 16px)}}
+
+/* 书签位置、统一表单笔迹与顶部操作区 */
+.mini-ribbon{right:-14px;top:20%;width:18px;height:42px;transform:rotate(-90deg)}
+.book-page:after{content:none;display:none}
+.book-top{font-size:20px;min-height:54px}
+.book-top button{font-size:21px}#saveStatus{font-size:17px}
+.field input,.field select,.field textarea,.repeat-row select{
+  font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  font-size:22px;font-weight:400;line-height:30px;letter-spacing:.2px;
+}
+.field input::placeholder,.field textarea::placeholder{font:inherit}
+@media(max-width:1050px) and (min-width:701px){.book-top{font-size:18px}.book-top button{font-size:19px}#saveStatus{font-size:15px}}
+@media(max-width:700px){
+  .book-top{min-height:66px}#bookBreadcrumb{font-size:16px}.book-top button{font-size:18px}#saveStatus{font-size:13px}
+  .field input,.field select,.field textarea,.repeat-row select{font-size:20px;line-height:28px}
+}
+
+.row-detail{display:flex;align-items:center;gap:9px}
+.speed-code{font-family:Consolas,"Courier New",monospace;font-size:18px;line-height:26px;letter-spacing:1px;color:#a34435;border:1px solid #cfb89a;border-radius:3px;padding:0 7px;background:#f3e8d4}
+.number-row input::placeholder{font-size:14px;letter-spacing:.3px}
+@media(max-width:700px){.speed-code{font-size:17px}.number-row input::placeholder{font-size:11px}}

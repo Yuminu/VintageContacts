@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {blankContact,normalizeContact,validateContact,planImport,toExcelRows,initial,cleanPhone} from '../dist/data.js';
+import {blankContact,normalizeContact,validateContact,planImport,toExcelRows,initial,cleanPhone,findDialTarget} from '../dist/data.js';
 const make=(name,phone)=>normalizeContact({...blankContact(phone),name});
 
 test('多种联系方式校验、格式归一化与跨联系人号码冲突',()=>{
@@ -37,4 +37,25 @@ test('真实 xlsx 编解码往返保留前导零、多账号、换行备注与�
 });
 test('常见中文和英文姓名映射到字母目录，数字归入 #',()=>{
   for(const [name,letter] of [['安然','A'],['陈屿','C'],['林知夏','L'],['宋一禾','S'],['许老师','X'],['叶舟','Y'],['周予安','Z'],['Alice','A'],['123','#']])assert.equal(initial(name),letter);
+});
+
+test('三位短码可选、唯一、保留前导零，未知短码不匹配',()=>{
+  const a={...make('家人','13800000001'),speedCode:'001'};
+  const b={...make('朋友','13800000002'),speedCode:'002'};
+  assert.equal(validateContact({...b,speedCode:''},[a,b]).speedCode,undefined);
+  assert.match(validateContact({...b,speedCode:'001'},[a,b]).speedCode,/已被使用/);
+  for(const code of ['1','01','0001','abc'])assert.match(validateContact({...b,speedCode:code},[a,b]).speedCode,/3 位数字/);
+  assert.equal(findDialTarget([a,b],'001'),a);
+  assert.equal(findDialTarget([a,b],'999'),undefined);
+  assert.equal(findDialTarget([a,b],'13800000002'),b);
+});
+
+test('短码 Excel 映射与旧格式合并兼容，重复短码不会覆盖其他联系人',()=>{
+  const old={...make('家人','13800000001'),speedCode:'001'};
+  const row=toExcelRows([old])[0];assert.equal(row['键盘短码'],'001');
+  const roundtrip=planImport([row],[]);assert.equal(roundtrip.contacts[0].speedCode,'001');
+  const merged=planImport([{'姓名':'家人','电话号码':'13800000001'}],[old]);
+  assert.equal(merged.contacts[0].speedCode,'001');
+  const conflict=planImport([{'姓名':'朋友','电话号码':'13800000002','键盘短码':'001'}],[old]);
+  assert.equal(conflict.added,0);assert.match(conflict.issues[0],/短码已被使用/);
 });
