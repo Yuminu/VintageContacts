@@ -227,7 +227,7 @@ sudo systemctl restart vintagecontacts
 | 数据库 | `/var/lib/vintagecontacts/contacts.sqlite`，owner `www-data` |
 | 备份 | `/var/backups/vintagecontacts/contacts-20261117-002120.sqlite` |
 | 旧站 80 | 保持正常，未修改 `/etc/nginx/sites-available/calculator` |
-| 验收截图 | `docs/images/cloud-home.png`、`cloud-directory.png`、`cloud-detail.png`、`cloud-excel.png` |
+| 验收截图 | `docs/images/cloud-home.png`、`cloud-directory.png`、`cloud-detail.png`、`cloud-excel.png`、`excel-table.png`、`cloud-mobile-*.png` |
 
 部署结果：
 
