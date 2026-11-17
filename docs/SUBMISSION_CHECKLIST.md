@@ -1,4 +1,4 @@
-# 极限编程作业提交清单
+﻿# 极限编程作业提交清单
 
 课程：2601_FZU-MU_SE。作业要求见[老师的作业帖](https://bbs.csdn.net/topics/620593436)。截止时间为 **2026 年 11 月 17 日 23:59（北京时间）**。
 
@@ -8,13 +8,14 @@
 
 | 要求 | 核验入口 |
 |---|---|
-| 联系人收藏 | `dist/app.js` 的特别关心书签和收藏列表 |
-| 多种联系方式 | 联系人详情的多电话、多邮箱、多社交账号，以及 `dist/data.js` 的模型与校验 |
+| 联系人收藏 | `dist/app.js` 的特别关心书签和收藏列表，状态保存到 SQLite |
+| 多种联系方式 | 联系人详情的多电话、多邮箱、多社交账号，以及 `server/db.js` 的 `contact_methods` |
 | Excel 导入导出 | 记事簿铅笔入口；`dist/data.js` 的导入合并与导出映射 |
+| 后端与数据库 | `server/`：Express 5、SQLite、版本号同步、服务端唯一性校验 |
 | 可用界面 | `dist/index.html`、`dist/styles.css`；浏览器实际运行 |
-| 可复现运行 | [README](../README.md)：`node server.mjs`，无需安装依赖 |
+| 可复现运行 | [README](../README.md)：`npm install && npm start`（Node.js 24） |
 | 代码规范 | [CODE_STYLE.md](../CODE_STYLE.md) |
-| 自动测试 | `node --test`；测试内容见 `tests/` |
+| 自动测试 | `npm test`；当前 25 项通过，测试内容见 `tests/` |
 | 至少 3 次提交 | [GitHub 提交历史](https://github.com/Yuminu/VintageContacts/commits/main/)；以远端实际记录为准 |
 | 项目版本发布 | [Releases](https://github.com/Yuminu/VintageContacts/releases)；核对版本及其代码提交 |
 | 发起 Pull Request | [Pull Requests](https://github.com/Yuminu/VintageContacts/pulls?q=is%3Apr)；核对 PR 的改动、分支和状态 |
@@ -53,3 +54,6 @@ Release 和 PR 以 GitHub 实际返回的记录为准，不能只凭本清单勾
 | 其他参考资料 | 按实际使用的资料填写 |
 
 可直接使用的项目链接：[仓库](https://github.com/Yuminu/VintageContacts)、[代码规范](https://github.com/Yuminu/VintageContacts/blob/main/CODE_STYLE.md)。发布博客前仍需确认链接指向的版本已上传。
+
+云部署地址：<http://101.34.73.63:8080/>。服务器 80 端口旧站保留，未修改旧站配置。
+

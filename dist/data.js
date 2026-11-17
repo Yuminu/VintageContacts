@@ -35,6 +35,8 @@ export function validateContact(c, contacts=[]) {
   if(phones.some(p=>!/^\d{3,20}$/.test(p)))errors.phones='电话号码应为 3–20 位数字，可包含空格、+ 或短横线';
   if(phones.some(p=>contacts.some(other=>other.id!==c.id&&other.phones.some(v=>cleanPhone(v)===p))))errors.phones='这个号码已属于另一位联系人，请先查看已有记录';
   if(c.emails.some(e=>e.trim()&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim())))errors.emails='请检查邮箱格式，例如 name@example.com';
+  const emailKeys=unique(c.emails.map(e=>e.trim().toLowerCase()));
+  if(emailKeys.some(e=>contacts.some(other=>other.id!==c.id&&other.emails.some(v=>v.trim().toLowerCase()===e))))errors.emails='这个邮箱已属于另一位联系人，请先查看已有记录';
   return errors;
 }
 export function toExcelRows(contacts) {

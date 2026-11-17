@@ -3,9 +3,22 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "复古转盘电话与纸质记事簿通讯录",
+  "description": "复古转盘电话与纸质记事簿通讯录，Express + SQLite 后端",
   "scripts": {
-    "start": "node server.mjs",
-    "test": "node --test"
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "test": "node --test",
+    "test:data": "node --test tests/data.test.mjs",
+    "test:dial": "node --test tests/dial.test.mjs",
+    "test:server": "node --test tests/server.test.mjs"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.4",
+    "helmet": "^8.3.0",
+    "zod": "^4.6.7"
   }
 }
